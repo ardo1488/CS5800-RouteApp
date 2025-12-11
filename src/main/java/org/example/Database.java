@@ -2,17 +2,28 @@ package org.example;
 
 import org.jxmapviewer.viewer.GeoPosition;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * DB API stays the same for the rest of the app:
+ * Singleton Database class handling both route storage and user authentication.
+ *
+ * Route API:
  * - saveRoute(name, distance, elevation, List<GeoPosition>)
  * - loadRoutePoints(routeId) -> List<GeoPosition>
+ * - getAllRoutes() -> List<RouteSummary>
  *
- * Internally we still persist lat/lon; Route wraps/unwraps to Point.
+ * User API:
+ * - userExists(username) -> boolean
+ * - createUser(username, password) -> UserProfile
+ * - authenticate(username, password) -> UserProfile
+ * - saveUser(UserProfile)
  */
 public class Database {
 
@@ -35,6 +46,7 @@ public class Database {
 
     private void createTablesIfNeeded() throws SQLException {
         try (Statement stmt = connection.createStatement()) {
+            // Routes table
             stmt.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS routes (" +
                             "  id INTEGER PRIMARY KEY AUTOINCREMENT," +
@@ -42,6 +54,7 @@ public class Database {
                             "  distance REAL," +
                             "  elevation INTEGER)"
             );
+            // Route points table
             stmt.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS route_points (" +
                             "  id INTEGER PRIMARY KEY AUTOINCREMENT," +
@@ -50,8 +63,36 @@ public class Database {
                             "  lon REAL," +
                             "  FOREIGN KEY(route_id) REFERENCES routes(id))"
             );
+            // Users table with authentication info
+            stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS users (" +
+                            "  id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                            "  username TEXT UNIQUE NOT NULL," +
+                            "  password_hash TEXT NOT NULL," +
+                            "  salt TEXT NOT NULL," +
+                            "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            );
+            // User profiles table with preferences
+            stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS user_profiles (" +
+                            "  user_id INTEGER PRIMARY KEY," +
+                            "  preferred_distance REAL DEFAULT 5.0," +
+                            "  preferred_variety INTEGER DEFAULT 5," +
+                            "  prefer_hills INTEGER DEFAULT 0," +
+                            "  max_elevation REAL DEFAULT 200.0," +
+                            "  use_metric INTEGER DEFAULT 1," +
+                            "  show_elevation INTEGER DEFAULT 1," +
+                            "  auto_fit_route INTEGER DEFAULT 1," +
+                            "  total_distance REAL DEFAULT 0.0," +
+                            "  total_elevation REAL DEFAULT 0.0," +
+                            "  routes_generated INTEGER DEFAULT 0," +
+                            "  routes_completed INTEGER DEFAULT 0," +
+                            "  FOREIGN KEY(user_id) REFERENCES users(id))"
+            );
         }
     }
+
+    // ==================== Route Methods ====================
 
     private static class LatLonColumns {
         final String latCol, lonCol;
@@ -130,10 +171,6 @@ public class Database {
         return pts;
     }
 
-    public void close() {
-        try { if (connection != null) connection.close(); } catch (SQLException ignored) {}
-    }
-
     public java.util.List<RouteSummary> getAllRoutes() {
         java.util.List<RouteSummary> list = new java.util.ArrayList<>();
         try (Statement stmt = connection.createStatement();
@@ -151,6 +188,217 @@ public class Database {
         }
         return list;
     }
+
+    // ==================== User Authentication Methods ====================
+
+    /**
+     * Check if a username already exists
+     */
+    public boolean userExists(String username) {
+        String sql = "SELECT COUNT(*) FROM users WHERE username = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, username.toLowerCase());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1) > 0;
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    /**
+     * Create a new user account
+     * @return The new UserProfile, or null if creation failed
+     */
+    public UserProfile createUser(String username, String password) {
+        try {
+            // Generate salt and hash password
+            String salt = generateSalt();
+            String passwordHash = hashPassword(password, salt);
+
+            // Insert user
+            String insertUser = "INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)";
+            int userId = -1;
+
+            try (PreparedStatement ps = connection.prepareStatement(insertUser)) {
+                ps.setString(1, username.toLowerCase());
+                ps.setString(2, passwordHash);
+                ps.setString(3, salt);
+                ps.executeUpdate();
+            }
+
+            // Get the new user ID
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT last_insert_rowid()")) {
+                if (rs.next()) {
+                    userId = rs.getInt(1);
+                }
+            }
+
+            if (userId > 0) {
+                // Create default profile
+                String insertProfile = "INSERT INTO user_profiles (user_id) VALUES (?)";
+                try (PreparedStatement ps = connection.prepareStatement(insertProfile)) {
+                    ps.setInt(1, userId);
+                    ps.executeUpdate();
+                }
+
+                // Return new UserProfile
+                UserProfile profile = new UserProfile(userId);
+                profile.setUserName(username);
+                return profile;
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * Authenticate a user
+     * @return The UserProfile if successful, null if authentication failed
+     */
+    public UserProfile authenticate(String username, String password) {
+        String sql = "SELECT id, password_hash, salt FROM users WHERE username = ?";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, username.toLowerCase());
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    int userId = rs.getInt("id");
+                    String storedHash = rs.getString("password_hash");
+                    String salt = rs.getString("salt");
+
+                    // Verify password
+                    String inputHash = hashPassword(password, salt);
+                    if (storedHash.equals(inputHash)) {
+                        // Load and return user profile
+                        return loadUserProfile(userId, username);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * Load a user's profile from the database
+     */
+    private UserProfile loadUserProfile(int userId, String username) {
+        String sql = "SELECT * FROM user_profiles WHERE user_id = ?";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, userId);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    UserProfile profile = new UserProfile(userId);
+                    profile.setUserName(username);
+                    profile.setPreferredDistanceKm(rs.getDouble("preferred_distance"));
+                    profile.setPreferredRouteVariety(rs.getInt("preferred_variety"));
+                    profile.setPreferHillRoutes(rs.getInt("prefer_hills") == 1);
+                    profile.setMaxElevationGain(rs.getDouble("max_elevation"));
+                    profile.setUseMetricUnits(rs.getInt("use_metric") == 1);
+                    profile.setShowElevation(rs.getInt("show_elevation") == 1);
+                    profile.setAutoFitRoute(rs.getInt("auto_fit_route") == 1);
+
+                    // Load statistics
+                    profile.loadStatistics(
+                            rs.getDouble("total_distance"),
+                            rs.getDouble("total_elevation"),
+                            rs.getInt("routes_generated"),
+                            rs.getInt("routes_completed")
+                    );
+
+                    return profile;
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+
+        // Return default profile if loading fails
+        UserProfile profile = new UserProfile(userId);
+        profile.setUserName(username);
+        return profile;
+    }
+
+    /**
+     * Save a user's profile to the database
+     */
+    public void saveUser(UserProfile profile) {
+        if (profile.getUserId() <= 0) {
+            System.out.println("Cannot save profile: no user ID");
+            return;
+        }
+
+        String sql = "UPDATE user_profiles SET " +
+                "preferred_distance = ?, preferred_variety = ?, prefer_hills = ?, " +
+                "max_elevation = ?, use_metric = ?, show_elevation = ?, auto_fit_route = ?, " +
+                "total_distance = ?, total_elevation = ?, routes_generated = ?, routes_completed = ? " +
+                "WHERE user_id = ?";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setDouble(1, profile.getPreferredDistanceKm());
+            ps.setInt(2, profile.getPreferredRouteVariety());
+            ps.setInt(3, profile.isPreferHillRoutes() ? 1 : 0);
+            ps.setDouble(4, profile.getMaxElevationGain());
+            ps.setInt(5, profile.isUseMetricUnits() ? 1 : 0);
+            ps.setInt(6, profile.isShowElevation() ? 1 : 0);
+            ps.setInt(7, profile.isAutoFitRoute() ? 1 : 0);
+            ps.setDouble(8, profile.getTotalDistanceRun());
+            ps.setDouble(9, profile.getTotalElevationGained());
+            ps.setInt(10, profile.getTotalRoutesGenerated());
+            ps.setInt(11, profile.getTotalRoutesCompleted());
+            ps.setInt(12, profile.getUserId());
+
+            ps.executeUpdate();
+            System.out.println("Profile saved for user ID: " + profile.getUserId());
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // ==================== Password Hashing ====================
+
+    /**
+     * Generate a random salt for password hashing
+     */
+    private String generateSalt() {
+        SecureRandom random = new SecureRandom();
+        byte[] salt = new byte[16];
+        random.nextBytes(salt);
+        return Base64.getEncoder().encodeToString(salt);
+    }
+
+    /**
+     * Hash a password with the given salt using SHA-256
+     */
+    private String hashPassword(String password, String salt) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(salt.getBytes());
+            byte[] hashedPassword = md.digest(password.getBytes());
+            return Base64.getEncoder().encodeToString(hashedPassword);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
+    // ==================== Utility ====================
+
+    public void close() {
+        try { if (connection != null) connection.close(); } catch (SQLException ignored) {}
+    }
+
+    // ==================== Inner Classes ====================
 
     public static class RouteSummary {
         private final int id;

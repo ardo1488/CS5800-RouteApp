@@ -9,16 +9,22 @@ import java.awt.event.WindowEvent;
 import java.util.ArrayList;
 import java.util.List;
 
-public class RouteService extends JFrame implements Dashboard.DashboardListener {
+public class RouteService extends JFrame implements Dashboard.DashboardListener, AuthContext.AuthStateListener {
     private final Map map;
     private final Dashboard dashboard;
     private final UndoManager undoManager;
     private final Database database;
     private final RoutingAPI routingAPI;
+    private final AuthContext authContext;
+    private UserProfile userProfile;
     private Route currentRoute;
     private GeoPosition pendingPoint;
     private boolean isRouting = false;
     private JLabel statusLabel;
+
+    // Route generation state
+    private boolean isGenerateMode = false;
+    private GeoPosition generateStartPoint = null;
 
     // Hardcoded API key
     private static final String API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY3NGVlNmM5NGMzYzQ2OGM5NGRhOTNhY2Q5ZWNjMDRlIiwiaCI6Im11cm11cjY0In0=";
@@ -31,7 +37,15 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         this.undoManager = new UndoManager();
         this.database = Database.getInstance();
         this.routingAPI = new RoutingAPI(API_KEY);
+        this.authContext = AuthContext.getInstance();
+        this.userProfile = UserProfile.getInstance(); // Start with guest profile
         this.currentRoute = new Route();
+
+        // Listen for authentication state changes
+        authContext.addListener(this);
+
+        // Apply user profile settings to routing API
+        userProfile.applyToRoutingAPI(routingAPI);
 
         // Create status label
         statusLabel = new JLabel("Ready - routes will snap to roads");
@@ -47,7 +61,9 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         dashboard.setDashboardListener(this);
 
         map.setMapClickListener(clickedPoint -> {
-            if (map.isDrawingMode()) {
+            if (isGenerateMode) {
+                handleGenerateStartPointClick(clickedPoint);
+            } else if (map.isDrawingMode()) {
                 handleMapClick(clickedPoint);
             }
         });
@@ -102,10 +118,10 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         routeRequest.add(lastPoint);
         routeRequest.add(clickedPoint);
 
-        SwingWorker<List<GeoPosition>, Void> worker = new SwingWorker<List<GeoPosition>, Void>() {
+        SwingWorker<RouteResult, Void> worker = new SwingWorker<RouteResult, Void>() {
             @Override
-            protected List<GeoPosition> doInBackground() {
-                return routingAPI.snapToRoads(routeRequest);
+            protected RouteResult doInBackground() {
+                return routingAPI.snapToRoadsWithElevation(routeRequest);
             }
 
             @Override
@@ -114,12 +130,15 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
                 map.setCursor(Cursor.getDefaultCursor());
 
                 try {
-                    List<GeoPosition> routedPath = get();
+                    RouteResult routeResult = get();
 
-                    if (routedPath != null && routedPath.size() >= 2) {
+                    if (routeResult != null && routeResult.getPointCount() >= 2) {
+                        List<GeoPosition> routedPath = routeResult.getPoints();
                         for (int i = 1; i < routedPath.size(); i++) {
                             currentRoute.addWaypoint(routedPath.get(i));
                         }
+                        // Add elevation data from this segment
+                        currentRoute.addElevation(routeResult.getAscent(), routeResult.getDescent());
                         setStatus("Route snapped to roads (" + routedPath.size() + " points)", new Color(0, 128, 0));
                     } else {
                         currentRoute.addWaypoint(clickedPoint);
@@ -153,8 +172,172 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         worker.execute();
     }
 
+    /**
+     * Handle click when in generate mode - this captures the starting point
+     */
+    private void handleGenerateStartPointClick(GeoPosition clickedPoint) {
+        generateStartPoint = clickedPoint;
+
+        // Exit generate mode temporarily
+        isGenerateMode = false;
+        map.setCursor(Cursor.getDefaultCursor());
+
+        // Now prompt for distance
+        promptForDistanceAndGenerate();
+    }
+
+    /**
+     * Show dialog to get desired distance and generate the route
+     */
+    private void promptForDistanceAndGenerate() {
+        if (generateStartPoint == null) {
+            setStatus("No starting point selected", Color.RED);
+            return;
+        }
+
+        // Create a custom dialog for distance input
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Distance input - use user profile default
+        gbc.gridx = 0; gbc.gridy = 0;
+        panel.add(new JLabel("Desired distance (km):"), gbc);
+
+        JSpinner distanceSpinner = new JSpinner(new SpinnerNumberModel(
+                userProfile.getPreferredDistanceKm(), 0.5, 50.0, 0.5));
+        JSpinner.NumberEditor editor = new JSpinner.NumberEditor(distanceSpinner, "0.0");
+        distanceSpinner.setEditor(editor);
+        gbc.gridx = 1;
+        panel.add(distanceSpinner, gbc);
+
+        // Route variety (points) - use user profile default
+        gbc.gridx = 0; gbc.gridy = 1;
+        panel.add(new JLabel("Route variety:"), gbc);
+
+        String[] varietyOptions = {"Simple (3 points)", "Medium (5 points)", "Complex (10 points)"};
+        JComboBox<String> varietyCombo = new JComboBox<>(varietyOptions);
+        // Set default based on user profile
+        int profileVariety = userProfile.getPreferredRouteVariety();
+        varietyCombo.setSelectedIndex(profileVariety == 3 ? 0 : (profileVariety == 5 ? 1 : 2));
+        gbc.gridx = 1;
+        panel.add(varietyCombo, gbc);
+
+        // Show coordinates of selected start point
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
+        JLabel coordLabel = new JLabel(String.format("Start: %.5f, %.5f",
+                generateStartPoint.getLatitude(), generateStartPoint.getLongitude()));
+        coordLabel.setForeground(Color.GRAY);
+        panel.add(coordLabel, gbc);
+
+        int result = JOptionPane.showConfirmDialog(this, panel, "Generate Running Route",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+        if (result == JOptionPane.OK_OPTION) {
+            double distanceKm = (Double) distanceSpinner.getValue();
+            int pointsIndex = varietyCombo.getSelectedIndex();
+            int points = pointsIndex == 0 ? 3 : (pointsIndex == 1 ? 5 : 10);
+
+            // Save preferences to user profile for next time
+            userProfile.setPreferredDistanceKm(distanceKm);
+            userProfile.setPreferredRouteVariety(points);
+
+            generateRoundTripRoute(generateStartPoint, distanceKm, points);
+        } else {
+            setStatus("Route generation cancelled", Color.GRAY);
+        }
+
+        // Reset generate state
+        generateStartPoint = null;
+    }
+
+    /**
+     * Generate a round-trip route using the API
+     */
+    private void generateRoundTripRoute(GeoPosition startPoint, double distanceKm, int points) {
+        if (isRouting) {
+            setStatus("Please wait for current operation to complete", Color.ORANGE);
+            return;
+        }
+
+        isRouting = true;
+        map.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        dashboard.setGenerateButtonEnabled(false);
+        setStatus(String.format("Generating %.1f km running route...", distanceKm), Color.BLUE);
+
+        // Use a random seed based on current time for variety
+        Integer seed = (int) (System.currentTimeMillis() % 100000);
+
+        SwingWorker<RouteResult, Void> worker = new SwingWorker<RouteResult, Void>() {
+            @Override
+            protected RouteResult doInBackground() {
+                return routingAPI.generateRoundTripWithElevation(startPoint, distanceKm, points, seed);
+            }
+
+            @Override
+            protected void done() {
+                isRouting = false;
+                map.setCursor(Cursor.getDefaultCursor());
+                dashboard.setGenerateButtonEnabled(true);
+
+                try {
+                    RouteResult routeResult = get();
+
+                    if (routeResult != null && routeResult.getPointCount() >= 3) {
+                        // Save current state for undo
+                        undoManager.record(currentRoute.createMemento());
+
+                        // Create new route from generated points
+                        currentRoute = new Route();
+                        currentRoute.loadFromGeoPositions(routeResult.getPoints());
+                        currentRoute.setElevation(routeResult.getAscent(), routeResult.getDescent());
+
+                        // Record statistics in user profile
+                        userProfile.recordRouteGenerated();
+
+                        // Debug output
+                        System.out.println("DEBUG: RouteResult ascent=" + routeResult.getAscent() +
+                                ", descent=" + routeResult.getDescent());
+                        System.out.println("DEBUG: currentRoute ascent=" + currentRoute.getAscent() +
+                                ", descent=" + currentRoute.getDescent());
+
+                        map.displayRoute(currentRoute);
+
+                        // Fit map to show the entire route (based on user preference)
+                        if (userProfile.isAutoFitRoute()) {
+                            SwingUtilities.invokeLater(() -> map.fitToRoute(currentRoute));
+                        }
+
+                        refreshStats();
+
+                        double actualDistance = currentRoute.getTotalDistance();
+                        setStatus(String.format("Generated %s (↑%s)",
+                                        userProfile.formatDistance(actualDistance),
+                                        userProfile.formatElevation(routeResult.getAscent())),
+                                new Color(0, 128, 0));
+                    } else {
+                        setStatus("Failed to generate route - try a different location or distance", Color.RED);
+                    }
+
+                } catch (Exception ex) {
+                    System.err.println("Route generation error: " + ex.getMessage());
+                    ex.printStackTrace();
+                    setStatus("Route generation error: " + ex.getMessage(), Color.RED);
+                }
+            }
+        };
+        worker.execute();
+    }
+
     @Override
     public void onDrawModeToggled(boolean enabled) {
+        // Exit generate mode if entering draw mode
+        if (enabled && isGenerateMode) {
+            isGenerateMode = false;
+            generateStartPoint = null;
+        }
+
         map.setDrawingMode(enabled);
         if (enabled) {
             setStatus("Draw mode ON - click to add road-snapped waypoints", new Color(0, 128, 0));
@@ -169,6 +352,8 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         currentRoute.clear();
         pendingPoint = null;
         isRouting = false;
+        isGenerateMode = false;
+        generateStartPoint = null;
         map.displayRoute(currentRoute);
         refreshStats();
         setStatus("Route cleared", Color.GRAY);
@@ -244,10 +429,103 @@ public class RouteService extends JFrame implements Dashboard.DashboardListener 
         setStatus("Loaded route: " + choice.getName(), new Color(0, 128, 0));
     }
 
+    @Override
+    public void onGenerateRoute() {
+        // Enter generate mode - user needs to click on map to select starting point
+        if (isRouting) {
+            setStatus("Please wait for current operation to complete", Color.ORANGE);
+            return;
+        }
+
+        // Toggle generate mode
+        if (isGenerateMode) {
+            // Cancel generate mode
+            isGenerateMode = false;
+            generateStartPoint = null;
+            map.setCursor(Cursor.getDefaultCursor());
+            map.setDrawingMode(false);
+            dashboard.setDrawButtonSelected(false);
+            setStatus("Route generation cancelled", Color.GRAY);
+        } else {
+            // Enter generate mode
+            isGenerateMode = true;
+            generateStartPoint = null;
+
+            // Disable draw mode if it's on
+            map.setDrawingMode(false);
+            dashboard.setDrawButtonSelected(false);
+
+            // Change cursor to indicate selection mode
+            map.setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+
+            setStatus("Click on the map to select your starting point for the run", new Color(0, 100, 200));
+        }
+    }
+
     @Override public void onZoomIn()  { map.zoomIn();  }
     @Override public void onZoomOut() { map.zoomOut(); }
 
+    @Override
+    public void onLoginLogout() {
+        if (authContext.isAuthenticated()) {
+            // Currently logged in - confirm logout
+            int confirm = JOptionPane.showConfirmDialog(this,
+                    "Are you sure you want to log out?",
+                    "Confirm Logout",
+                    JOptionPane.YES_NO_OPTION);
+            if (confirm == JOptionPane.YES_OPTION) {
+                authContext.logout();
+            }
+        } else {
+            // Not logged in - show login dialog
+            LoginDialog loginDialog = new LoginDialog(this);
+            loginDialog.showDialog();
+        }
+    }
+
+    // ==================== AuthStateListener Implementation ====================
+
+    @Override
+    public void onStateChanged(AuthState oldState, AuthState newState) {
+        System.out.println("Auth state changed: " + oldState.getStateName() + " -> " + newState.getStateName());
+    }
+
+    @Override
+    public void onLoginSuccess(UserProfile user) {
+        this.userProfile = user;
+        userProfile.applyToRoutingAPI(routingAPI);
+        dashboard.updateUserDisplay(user.getUserName(), true);
+        setStatus("Welcome, " + user.getUserName() + "!", new Color(0, 128, 0));
+    }
+
+    @Override
+    public void onLoginFailure(String reason) {
+        setStatus("Login failed: " + reason, Color.RED);
+    }
+
+    @Override
+    public void onLogout() {
+        this.userProfile = UserProfile.getInstance(); // Back to guest profile
+        userProfile.applyToRoutingAPI(routingAPI);
+        dashboard.updateUserDisplay(null, false);
+        setStatus("Logged out", Color.GRAY);
+    }
+
+    @Override
+    public void onRegistrationSuccess(UserProfile user) {
+        this.userProfile = user;
+        userProfile.applyToRoutingAPI(routingAPI);
+        dashboard.updateUserDisplay(user.getUserName(), true);
+        setStatus("Account created! Welcome, " + user.getUserName() + "!", new Color(0, 128, 0));
+    }
+
+    @Override
+    public void onRegistrationFailure(String reason) {
+        setStatus("Registration failed: " + reason, Color.RED);
+    }
+
     private void refreshStats() {
-        dashboard.updateRouteStats(currentRoute.getTotalDistance(), currentRoute.getEstimatedElevation());
+        dashboard.updateRouteStats(currentRoute.getTotalDistance(),
+                currentRoute.getAscent(), currentRoute.getDescent());
     }
 }

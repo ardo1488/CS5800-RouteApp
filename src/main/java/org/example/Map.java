@@ -66,7 +66,7 @@ public class Map extends JPanel {
         viewer.addMouseListener(mia);
         viewer.addMouseMotionListener(mia);
 
-        // Wheel to zoom – keep cursor position stable while zooming
+        // Wheel to zoom â€“ keep cursor position stable while zooming
         viewer.addMouseWheelListener(new ZoomMouseWheelListenerCursor(viewer));
 
         // Arrow keys to pan

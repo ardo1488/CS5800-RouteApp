@@ -16,6 +16,10 @@ public class Route {
     private String name = "";
     private final List<Point> points = new ArrayList<>();
 
+    // Elevation data from routing API
+    private double ascent = 0;   // Total ascent in meters
+    private double descent = 0;  // Total descent in meters
+
     /* ---------------- Core ops ---------------- */
 
     /** Add a waypoint as our rich Point type. */
@@ -38,7 +42,7 @@ public class Route {
         }
     }
 
-    /** Back-compat: Add with GeoPosition (used by Map click → RouteMapApp). */
+    /** Back-compat: Add with GeoPosition (used by Map click â†’ RouteMapApp). */
     public void addWaypoint(GeoPosition gp) {
         if (gp == null) return;
         addWaypoint(new Point(gp, Point.PointType.WAYPOINT));
@@ -46,6 +50,8 @@ public class Route {
 
     public void clear() {
         points.clear();
+        ascent = 0;
+        descent = 0;
     }
 
     public boolean isEmpty() {
@@ -87,15 +93,62 @@ public class Route {
         return total;
     }
 
+    /**
+     * Get total ascent (elevation gain) in meters
+     */
+    public double getAscent() {
+        return ascent;
+    }
+
+    /**
+     * Set total ascent from routing API
+     */
+    public void setAscent(double ascent) {
+        this.ascent = ascent;
+    }
+
+    /**
+     * Get total descent (elevation loss) in meters
+     */
+    public double getDescent() {
+        return descent;
+    }
+
+    /**
+     * Set total descent from routing API
+     */
+    public void setDescent(double descent) {
+        this.descent = descent;
+    }
+
+    /**
+     * Add elevation data from a RouteResult segment
+     */
+    public void addElevation(double segmentAscent, double segmentDescent) {
+        this.ascent += segmentAscent;
+        this.descent += segmentDescent;
+    }
+
+    /**
+     * Set elevation data from a RouteResult (replaces existing values)
+     */
+    public void setElevation(double ascent, double descent) {
+        this.ascent = ascent;
+        this.descent = descent;
+    }
+
+    /**
+     * @deprecated Use getAscent() and getDescent() instead
+     */
     public int getEstimatedElevation() {
-        // placeholder; wire a real elevation service if desired
-        return 0;
+        // Return ascent as the "elevation" for backward compatibility
+        return (int) Math.round(ascent);
     }
 
     /* ---------------- Memento (undo/redo) ---------------- */
 
     public RouteMemento createMemento() {
-        return new RouteMemento(copyPoints(points), id, name);
+        return new RouteMemento(copyPoints(points), id, name, ascent, descent);
     }
 
     public void applyMemento(RouteMemento m) {
@@ -104,6 +157,8 @@ public class Route {
         points.addAll(copyPoints(m.getPoints()));
         this.id = m.getId();
         this.name = m.getName();
+        this.ascent = m.getAscent();
+        this.descent = m.getDescent();
     }
 
     private static List<Point> copyPoints(List<Point> src) {
