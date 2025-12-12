@@ -1,130 +1,315 @@
 package org.example;
 
+import org.jxmapviewer.JXMapViewer;
 import org.jxmapviewer.viewer.GeoPosition;
 import org.junit.jupiter.api.Test;
 
-import javax.swing.*;
 import java.awt.*;
 import java.lang.reflect.Field;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class MapTest {
 
-    private int getViewerZoom(Map map) throws Exception {
-        Field viewerField = Map.class.getDeclaredField("viewer");
-        viewerField.setAccessible(true);
-        Object viewer = viewerField.get(map);
-        // JXMapViewer#getZoom is public, but we can't import the class cleanly here,
-        // so we use reflection:
-        return (int) viewer.getClass().getMethod("getZoom").invoke(viewer);
+    // ---------- reflection helpers ----------
+
+    @SuppressWarnings("unchecked")
+    private static <T> T getField(Object target, String name, Class<T> type) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return (T) f.get(target);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    /* setMapClickListener / displayRoute */
+    private static void setField(Object target, String name, Object value) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(target, value);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static boolean getBooleanField(Object target, String name) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.getBoolean(target);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Map createMap() {
+        return new Map();
+    }
+
+    // -------------------------------------------------------------
+    // Constructor tests
+    // -------------------------------------------------------------
 
     @Test
-    public void setMapClickListenerAndDisplayRouteDoNotThrowTest() {
-        Map map = new Map();
-        map.setMapClickListener(position -> { /* no-op */ });
+    public void constructorInitializesViewerAndDefaultsTest() {
+        Map map = createMap();
 
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+        assertNotNull(viewer);
 
-        assertDoesNotThrow(() -> map.displayRoute(route));
+        Route currentRoute = getField(map, "currentRoute", Route.class);
+        assertNull(currentRoute);
+
+        assertFalse(getBooleanField(map, "drawingMode"));
+        assertNull(getField(map, "clickListener", Map.MapClickListener.class));
     }
 
     @Test
-    public void setMapClickListenerAcceptsNullListenerTest() {
-        Map map = new Map();
-        assertDoesNotThrow(() -> map.setMapClickListener(null));
+    public void constructorSetsInitialCenterAndZoomOnViewerTest() {
+        Map map = createMap();
+
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+        GeoPosition center = viewer.getAddressLocation();
+
+        assertEquals(37.7749, center.getLatitude(), 0.001);
+        assertEquals(-122.4194, center.getLongitude(), 0.001);
+        assertEquals(4, viewer.getZoom());
     }
 
-    /* setDrawingMode / isDrawingMode */
+    // -------------------------------------------------------------
+    // setMapClickListener(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void setDrawingModeEnablesDrawingFlagTest() {
-        Map map = new Map();
+    public void setMapClickListenerStoresListenerReferenceTest() {
+        Map map = createMap();
+        Map.MapClickListener listener = pos -> {};
+
+        map.setMapClickListener(listener);
+
+        Map.MapClickListener stored = getField(map, "clickListener", Map.MapClickListener.class);
+        assertSame(listener, stored);
+    }
+
+    @Test
+    public void setMapClickListenerCanBeSetToNullTest() {
+        Map map = createMap();
+        Map.MapClickListener listener = pos -> {};
+        map.setMapClickListener(listener);
+
+        map.setMapClickListener(null);
+
+        Map.MapClickListener stored = getField(map, "clickListener", Map.MapClickListener.class);
+        assertNull(stored);
+    }
+
+    // -------------------------------------------------------------
+    // setDrawingMode(...) / isDrawingMode() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void setDrawingModeTrueSetsFlagAndIsDrawingModeReturnsTrueTest() {
+        Map map = createMap();
+
         map.setDrawingMode(true);
+
         assertTrue(map.isDrawingMode());
+        assertTrue(getBooleanField(map, "drawingMode"));
     }
 
     @Test
-    public void setDrawingModeDisablesDrawingFlagTest() {
-        Map map = new Map();
+    public void setDrawingModeFalseSetsFlagAndIsDrawingModeReturnsFalseTest() {
+        Map map = createMap();
         map.setDrawingMode(true);
+
         map.setDrawingMode(false);
+
         assertFalse(map.isDrawingMode());
+        assertFalse(getBooleanField(map, "drawingMode"));
     }
 
-    /* setCursor */
+    // -------------------------------------------------------------
+    // displayRoute(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void setCursorPropagatesToComponentTest() {
-        Map map = new Map();
+    public void displayRouteStoresRouteReferenceAndRepaintsTest() {
+        Map map = createMap();
+        Route route = new Route();
+        route.addWaypoint(new GeoPosition(10.0, 20.0));
+
+        map.displayRoute(route);
+
+        Route stored = getField(map, "currentRoute", Route.class);
+        assertSame(route, stored);
+    }
+
+    @Test
+    public void displayRouteAllowsNullAndClearsCurrentRouteReferenceTest() {
+        Map map = createMap();
+        Route route = new Route();
+        route.addWaypoint(new GeoPosition(10.0, 20.0));
+        map.displayRoute(route);
+
+        map.displayRoute(null);
+
+        Route stored = getField(map, "currentRoute", Route.class);
+        assertNull(stored);
+    }
+
+    // -------------------------------------------------------------
+    // setCursor(...) override tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void setCursorUpdatesBothPanelAndViewerCursorTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
         Cursor hand = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR);
+        map.setCursor(hand);
 
-        assertDoesNotThrow(() -> map.setCursor(hand));
+        assertEquals(hand, map.getCursor());
+        assertEquals(hand, viewer.getCursor());
     }
 
     @Test
-    public void setCursorAcceptsDefaultCursorTest() {
-        Map map = new Map();
-        assertDoesNotThrow(() -> map.setCursor(Cursor.getDefaultCursor()));
+    public void setCursorAcceptsDefaultCursorWithoutExceptionTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        Cursor defaultCursor = Cursor.getDefaultCursor();
+        map.setCursor(defaultCursor);
+
+        assertEquals(defaultCursor, map.getCursor());
+        assertEquals(defaultCursor, viewer.getCursor());
     }
 
-    /* fitToRoute */
+    // -------------------------------------------------------------
+    // fitToRoute(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void fitToRouteWithNullRouteDoesNothingTest() {
-        Map map = new Map();
-        assertDoesNotThrow(() -> map.fitToRoute(null));
+    public void fitToRouteWithNullOrEmptyRouteLeavesViewerCenterUnchangedTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        GeoPosition beforeCenter = viewer.getAddressLocation();
+        int beforeZoom = viewer.getZoom();
+
+        // null route
+        map.fitToRoute(null);
+        GeoPosition centerAfterNull = viewer.getAddressLocation();
+        int zoomAfterNull = viewer.getZoom();
+
+        assertEquals(beforeCenter.getLatitude(), centerAfterNull.getLatitude(), 0.0001);
+        assertEquals(beforeCenter.getLongitude(), centerAfterNull.getLongitude(), 0.0001);
+        assertEquals(beforeZoom, zoomAfterNull);
+
+        // empty route
+        Route empty = new Route();
+        map.fitToRoute(empty);
+        GeoPosition centerAfterEmpty = viewer.getAddressLocation();
+        int zoomAfterEmpty = viewer.getZoom();
+
+        assertEquals(beforeCenter.getLatitude(), centerAfterEmpty.getLatitude(), 0.0001);
+        assertEquals(beforeCenter.getLongitude(), centerAfterEmpty.getLongitude(), 0.0001);
+        assertEquals(beforeZoom, zoomAfterEmpty);
     }
 
     @Test
-    public void fitToRouteWithNonEmptyRouteAdjustsZoomLevelTest() throws Exception {
-        Map map = new Map();
-        // Need the component to have a size; add to a frame for layout
-        JFrame frame = new JFrame();
-        frame.add(map);
-        frame.setSize(800, 600);
-        frame.addNotify(); // ensure peer created
+    public void fitToRouteWithValidRouteRecentersMapWithinBoundsTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        // give the viewer a non-zero size so zoom calculation can run
+        viewer.setSize(800, 600);
 
         Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
-        route.addWaypoint(new GeoPosition(10.0, 10.0));
+        route.addWaypoint(new GeoPosition(10.0, 20.0));
+        route.addWaypoint(new GeoPosition(20.0, 30.0));
 
-        int zoomBefore = getViewerZoom(map);
         map.fitToRoute(route);
-        int zoomAfter = getViewerZoom(map);
 
-        // We don't know exact value, but fitToRoute should set something, not throw.
-        assertTrue(zoomAfter >= 0 && zoomAfter <= 19);
+        GeoPosition center = viewer.getAddressLocation();
+        List<GeoPosition> pts = route.getAllPointsAsGeoPositions();
+
+        double minLat = Math.min(pts.get(0).getLatitude(), pts.get(1).getLatitude());
+        double maxLat = Math.max(pts.get(0).getLatitude(), pts.get(1).getLatitude());
+        double minLon = Math.min(pts.get(0).getLongitude(), pts.get(1).getLongitude());
+        double maxLon = Math.max(pts.get(0).getLongitude(), pts.get(1).getLongitude());
+
+        assertTrue(center.getLatitude() >= minLat && center.getLatitude() <= maxLat);
+        assertTrue(center.getLongitude() >= minLon && center.getLongitude() <= maxLon);
+
+        int zoom = viewer.getZoom();
+        int minZoom = viewer.getTileFactory().getInfo().getMinimumZoomLevel();
+        int maxZoom = viewer.getTileFactory().getInfo().getMaximumZoomLevel();
+        assertTrue(zoom >= minZoom && zoom <= maxZoom);
     }
 
-    /* zoomIn / zoomOut */
+    // -------------------------------------------------------------
+    // zoomIn() tests
+    // -------------------------------------------------------------
 
     @Test
-    public void zoomInDecreasesZoomValueWithinBoundsTest() throws Exception {
-        Map map = new Map();
-        int before = getViewerZoom(map);
+    public void zoomInDoesNotGoBelowMinimumZoomLevelTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        int minZoom = viewer.getTileFactory().getInfo().getMinimumZoomLevel();
+        viewer.setZoom(minZoom);
 
         map.zoomIn();
-        int after = getViewerZoom(map);
 
-        // JXMapViewer zoom 0 is most zoomed-in; zoomIn should decrease or stay same at bound
-        assertTrue(after <= before);
-        assertTrue(after >= 0);
+        assertEquals(minZoom, viewer.getZoom());
     }
 
     @Test
-    public void zoomOutIncreasesZoomValueWithinBoundsTest() throws Exception {
-        Map map = new Map();
-        int before = getViewerZoom(map);
+    public void zoomInReducesZoomWhenAboveMinimumTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        int minZoom = viewer.getTileFactory().getInfo().getMinimumZoomLevel();
+        viewer.setZoom(minZoom + 2);
+        int before = viewer.getZoom();
+
+        map.zoomIn();
+
+        assertEquals(before - 1, viewer.getZoom());
+    }
+
+    // -------------------------------------------------------------
+    // zoomOut() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void zoomOutDoesNotExceedMaximumZoomLevelTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        int maxZoom = viewer.getTileFactory().getInfo().getMaximumZoomLevel();
+        viewer.setZoom(maxZoom);
 
         map.zoomOut();
-        int after = getViewerZoom(map);
 
-        assertTrue(after >= before);
-        assertTrue(after <= 19);
+        assertEquals(maxZoom, viewer.getZoom());
+    }
+
+    @Test
+    public void zoomOutIncreasesZoomWhenBelowMaximumTest() {
+        Map map = createMap();
+        JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+        int maxZoom = viewer.getTileFactory().getInfo().getMaximumZoomLevel();
+        viewer.setZoom(maxZoom - 2);
+        int before = viewer.getZoom();
+
+        map.zoomOut();
+
+        assertEquals(before + 1, viewer.getZoom());
     }
 }

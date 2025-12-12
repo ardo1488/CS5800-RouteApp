@@ -1,132 +1,204 @@
 package org.example;
 
-import org.jxmapviewer.viewer.GeoPosition;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class UndoManagerTest {
 
-    /* record */
+    private UndoManager createManager() {
+        return new UndoManager();
+    }
+
+    private Route createRoute(int id, String name) {
+        Route route = new Route();
+        route.setId(id);
+        route.setName(name);
+        return route;
+    }
+
+    // -------------------------------------------------------------
+    // recordMemento(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void recordAddsMementoToUndoStackTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+    public void recordMementoStoresStateForUndoTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(1, "One");
 
-        UndoManager manager = new UndoManager();
-        manager.record(route.createMemento());
+        // Save initial state
+        manager.recordMemento(route.createMemento());
 
-        // Change route then undo should revert, proving something was recorded
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        manager.undo(route);
+        // Change route
+        route.setId(2);
+        route.setName("Two");
 
-        assertEquals(1, route.getPoints().size());
+        // Undo should restore the saved state
+        manager.undoMemento(route);
+
+        assertEquals(1, route.getId());
+        assertEquals("One", route.getName());
     }
 
     @Test
-    public void recordWithNullDoesNotModifyStacksTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+    public void recordMementoClearsRedoHistoryWhenNewStateRecordedTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(1, "One");
 
-        UndoManager manager = new UndoManager();
-        manager.record(null);
+        // Record initial state and then change + undo to create redo history
+        manager.recordMemento(route.createMemento());
+        route.setId(2);
+        route.setName("Two");
+        manager.undoMemento(route); // redo stack now holds state (id=2, name="Two")
 
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        manager.undo(route); // should do nothing
+        // Now record a brand new state, which should clear the redo stack
+        route.setId(3);
+        route.setName("Three");
+        manager.recordMemento(route.createMemento());
 
-        assertEquals(2, route.getPoints().size());
+        // Change route again and try redo -> should do nothing because redo was cleared
+        route.setId(4);
+        route.setName("Four");
+        manager.redoMemento(route);
+
+        assertEquals(4, route.getId());
+        assertEquals("Four", route.getName());
     }
 
-    /* undo */
+    // -------------------------------------------------------------
+    // undoMemento(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void undoRestoresPreviousRouteStateTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+    public void undoMementoRestoresPreviousStateAndPushesCurrentToRedoTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(1, "One");
 
-        UndoManager manager = new UndoManager();
-        manager.record(route.createMemento());
+        manager.recordMemento(route.createMemento()); // save state 1
+        route.setId(2);
+        route.setName("Two");
+        manager.recordMemento(route.createMemento()); // save state 2
 
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        assertEquals(2, route.getPoints().size());
+        // Change again without recording; this is the "current" state
+        route.setId(3);
+        route.setName("Three");
 
-        manager.undo(route);
+        manager.undoMemento(route);
 
-        assertEquals(1, route.getPoints().size());
-    }
+        // Should restore state 2, and state 3 should now live in the redo stack
+        assertEquals(2, route.getId());
+        assertEquals("Two", route.getName());
 
-    @Test
-    public void undoWithEmptyUndoStackDoesNothingTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
-
-        UndoManager manager = new UndoManager();
-        manager.undo(route);
-
-        assertEquals(1, route.getPoints().size());
-    }
-
-    /* redo */
-
-    @Test
-    public void redoReappliesUndoneStateTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
-
-        UndoManager manager = new UndoManager();
-        manager.record(route.createMemento());
-
-        // Change and undo
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        manager.undo(route);
-        assertEquals(1, route.getPoints().size());
-
-        manager.redo(route);
-        assertEquals(2, route.getPoints().size());
+        // Redo should bring us back to the state 3
+        manager.redoMemento(route);
+        assertEquals(3, route.getId());
+        assertEquals("Three", route.getName());
     }
 
     @Test
-    public void redoWithEmptyRedoStackDoesNothingTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+    public void undoMementoDoesNothingWhenNoUndoHistoryTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(5, "Five");
 
-        UndoManager manager = new UndoManager();
-        manager.redo(route);
+        // No mementos recorded
+        manager.undoMemento(route);
 
-        assertEquals(1, route.getPoints().size());
+        // Route should remain unchanged
+        assertEquals(5, route.getId());
+        assertEquals("Five", route.getName());
     }
 
-    /* clear */
+    // -------------------------------------------------------------
+    // redoMemento(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void clearEmptiesBothStacksTest() {
-        Route route = new Route();
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
+    public void redoMementoRestoresNextStateAndPushesCurrentToUndoTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(1, "One");
 
-        UndoManager manager = new UndoManager();
-        manager.record(route.createMemento());
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        manager.undo(route); // push to redo
+        // Save initial state, then change and undo to create redo history
+        manager.recordMemento(route.createMemento());
+        route.setId(2);
+        route.setName("Two");
+        manager.undoMemento(route); // redo stack holds state 2, route now back to state 1
+
+        manager.redoMemento(route);
+
+        // Redo brings us to state 2
+        assertEquals(2, route.getId());
+        assertEquals("Two", route.getName());
+
+        // Now undo should bring us back to state 1 (current was pushed to undo)
+        manager.undoMemento(route);
+        assertEquals(1, route.getId());
+        assertEquals("One", route.getName());
+    }
+
+    @Test
+    public void redoMementoDoesNothingWhenNoRedoHistoryTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(10, "Ten");
+
+        // No redo history yet
+        manager.redoMemento(route);
+
+        // Route remains unchanged
+        assertEquals(10, route.getId());
+        assertEquals("Ten", route.getName());
+    }
+
+    // -------------------------------------------------------------
+    // clear() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void clearEmptiesUndoAndRedoStacksSoNoFurtherUndoRedoTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(1, "One");
+
+        manager.recordMemento(route.createMemento());
+        route.setId(2);
+        route.setName("Two");
+        manager.undoMemento(route); // creates redo history
 
         manager.clear();
 
-        // After clear, undo/redo should have no effect
-        int sizeBefore = route.getPoints().size();
-        manager.undo(route);
-        manager.redo(route);
-        assertEquals(sizeBefore, route.getPoints().size());
+        // After clear, undo and redo should do nothing
+        route.setId(3);
+        route.setName("Three");
+        manager.undoMemento(route);
+        assertEquals(3, route.getId());
+        assertEquals("Three", route.getName());
+
+        manager.redoMemento(route);
+        assertEquals(3, route.getId());
+        assertEquals("Three", route.getName());
     }
 
     @Test
-    public void clearOnAlreadyEmptyStacksKeepsThemEmptyTest() {
-        Route route = new Route();
-        UndoManager manager = new UndoManager();
+    public void clearAllowsFreshHistoryAfterClearTest() {
+        UndoManager manager = createManager();
+        Route route = createRoute(5, "Five");
 
-        manager.clear();
-        manager.undo(route);
-        manager.redo(route);
+        // First history
+        manager.recordMemento(route.createMemento());
+        route.setId(6);
+        route.setName("Six");
+        manager.undoMemento(route); // redo history exists
 
-        assertTrue(route.isEmpty());
+        manager.clear(); // start fresh
+
+        // New history after clear
+        route.setId(7);
+        route.setName("Seven");
+        manager.recordMemento(route.createMemento());
+        route.setId(8);
+        route.setName("Eight");
+
+        manager.undoMemento(route);
+
+        assertEquals(7, route.getId());
+        assertEquals("Seven", route.getName());
     }
 }

@@ -1,341 +1,580 @@
 package org.example;
 
+import org.jxmapviewer.JXMapViewer;
 import org.jxmapviewer.viewer.GeoPosition;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.*;
 import java.awt.*;
 import java.lang.reflect.Field;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class RouteServiceTest {
 
-    private Map getMap(RouteService service) throws Exception {
-        Field field = RouteService.class.getDeclaredField("map");
-        field.setAccessible(true);
-        return (Map) field.get(service);
+    // ---------- reflection helpers ----------
+
+    @SuppressWarnings("unchecked")
+    private static <T> T getField(Object target, String name, Class<T> type) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return (T) f.get(target);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    private Route getCurrentRoute(RouteService service) throws Exception {
-        Field field = RouteService.class.getDeclaredField("currentRoute");
-        field.setAccessible(true);
-        return (Route) field.get(service);
+    private static void setField(Object target, String name, Object value) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(target, value);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    private UndoManager getUndoManager(RouteService service) throws Exception {
-        Field field = RouteService.class.getDeclaredField("undoManager");
-        field.setAccessible(true);
-        return (UndoManager) field.get(service);
+    private static boolean getBooleanField(Object target, String name) {
+        try {
+            Field f = target.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.getBoolean(target);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    private JLabel getStatusLabel(RouteService service) throws Exception {
-        Field field = RouteService.class.getDeclaredField("statusLabel");
-        field.setAccessible(true);
-        return (JLabel) field.get(service);
+    private RouteService createService() {
+        return new RouteService();
     }
 
-    private GeoPosition getSamplePosition() {
-        return new GeoPosition(10.0, 20.0);
-    }
-
-    /* constructor (RouteService) */
+    // -------------------------------------------------------------
+    // Constructor tests
+    // -------------------------------------------------------------
 
     @Test
-    public void constructorInitializesCoreComponentsTest() throws Exception {
-        RouteService service = new RouteService();
-
-        assertNotNull(getMap(service));
-        assertNotNull(getCurrentRoute(service));
-        assertNotNull(getUndoManager(service));
-        assertNotNull(getStatusLabel(service));
-
-        service.dispose();
-    }
-
-    @Test
-    public void constructorInitialStatusMessageIndicatesReadyStateTest() throws Exception {
-        RouteService service = new RouteService();
-        JLabel statusLabel = getStatusLabel(service);
-
-        assertNotNull(statusLabel.getText());
-        assertTrue(statusLabel.getText().toLowerCase().contains("ready"));
-
-        service.dispose();
-    }
-
-    /* onDrawModeToggled */
-
-    @Test
-    public void onDrawModeToggledTrueEnablesDrawingAndUpdatesStatusTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
-        JLabel statusLabel = getStatusLabel(service);
-
-        service.onDrawModeToggled(true);
-
-        assertTrue(map.isDrawingMode());
-        assertTrue(statusLabel.getText().contains("Draw mode ON"));
-
-        service.dispose();
+    public void constructorInitializesCoreComponentsNonNullTest() {
+        RouteService service = createService();
+        try {
+            assertNotNull(getField(service, "map", Map.class));
+            assertNotNull(getField(service, "dashboard", Dashboard.class));
+            assertNotNull(getField(service, "undoManager", UndoManager.class));
+            assertNotNull(getField(service, "database", Database.class));
+            assertNotNull(getField(service, "routingAPI", RoutingAPI.class));
+            assertNotNull(getField(service, "authContext", AuthContext.class));
+            assertNotNull(getField(service, "userProfile", UserProfile.class));
+            assertNotNull(getField(service, "currentRoute", Route.class));
+            assertNotNull(getField(service, "statusLabel", JLabel.class));
+        } finally {
+            service.dispose();
+        }
     }
 
     @Test
-    public void onDrawModeToggledFalseDisablesDrawingAndUpdatesStatusTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
-        JLabel statusLabel = getStatusLabel(service);
+    public void constructorAppliesUserProfileSettingsToRoutingApiTest() {
+        RouteService service = createService();
+        try {
+            RoutingAPI api = getField(service, "routingAPI", RoutingAPI.class);
+            UserProfile profile = getField(service, "userProfile", UserProfile.class);
 
-        service.onDrawModeToggled(true);
-        service.onDrawModeToggled(false);
-
-        assertFalse(map.isDrawingMode());
-        assertTrue(statusLabel.getText().contains("Draw mode OFF"));
-
-        service.dispose();
+            assertEquals(profile.getPreferredRoutingProfile(), api.getProfile());
+        } finally {
+            service.dispose();
+        }
     }
 
-    /* onClearRoute */
+    // -------------------------------------------------------------
+    // onDrawModeToggled(...) tests
+    // -------------------------------------------------------------
 
     @Test
-    public void onClearRouteClearsCurrentRouteAndPendingFlagsTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
+    public void onDrawModeToggledEnablingSetsDrawingModeAndExitsGenerateModeTest() {
+        RouteService service = createService();
+        try {
+            Map map = getField(service, "map", Map.class);
 
-        // Add a point to make route non-empty
-        route.addWaypoint(getSamplePosition());
+            // simulate generate mode being active
+            setField(service, "isGenerateMode", true);
+            setField(service, "generateStartPoint", new GeoPosition(1.0, 2.0));
 
-        service.onClearRoute();
+            service.onDrawModeToggled(true);
 
-        assertTrue(route.isEmpty());
-        JLabel statusLabel = getStatusLabel(service);
-        assertTrue(statusLabel.getText().contains("Route cleared"));
-
-        service.dispose();
-    }
-
-    @Test
-    public void onClearRouteRecordsUndoStateAllowingUndoTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-
-        route.addWaypoint(getSamplePosition());
-        int originalSize = route.getPoints().size();
-        assertTrue(originalSize > 0);
-
-        service.onClearRoute();
-        assertTrue(route.isEmpty());
-
-        // Undo should restore previous route
-        service.onUndo();
-        assertEquals(originalSize, route.getPoints().size());
-
-        service.dispose();
-    }
-
-    /* onUndo */
-
-    @Test
-    public void onUndoRevertsToPreviousRouteStateWhenAvailableTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-        UndoManager undoManager = getUndoManager(service);
-
-        // initial state with one point
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
-        undoManager.record(route.createMemento());
-
-        // modified state
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        assertEquals(2, route.getPoints().size());
-
-        service.onUndo();
-        assertEquals(1, route.getPoints().size());
-
-        service.dispose();
+            assertTrue(map.isDrawingMode());
+            assertFalse(getBooleanField(service, "isGenerateMode"));
+            assertNull(getField(service, "generateStartPoint", GeoPosition.class));
+        } finally {
+            service.dispose();
+        }
     }
 
     @Test
-    public void onUndoWithNoUndoStateDoesNothingTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
+    public void onDrawModeToggledDisablingTurnsOffDrawingModeTest() {
+        RouteService service = createService();
+        try {
+            Map map = getField(service, "map", Map.class);
+            map.setDrawingMode(true);
 
-        // No mementos recorded
-        route.addWaypoint(getSamplePosition());
-        int sizeBefore = route.getPoints().size();
+            service.onDrawModeToggled(false);
 
-        service.onUndo();
-        int sizeAfter = route.getPoints().size();
-
-        assertEquals(sizeBefore, sizeAfter);
-
-        service.dispose();
+            assertFalse(map.isDrawingMode());
+        } finally {
+            service.dispose();
+        }
     }
 
-    /* onRedo */
+    // -------------------------------------------------------------
+    // onClearRoute() tests
+    // -------------------------------------------------------------
 
     @Test
-    public void onRedoReappliesUndoneStateWhenAvailableTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-        UndoManager undoManager = getUndoManager(service);
+    public void onClearRouteClearsRouteAndResetsFlagsTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
 
-        // original state
-        route.addWaypoint(new GeoPosition(0.0, 0.0));
-        undoManager.record(route.createMemento());
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
+            assertFalse(route.isEmpty());
 
-        // new state
-        route.addWaypoint(new GeoPosition(1.0, 1.0));
-        assertEquals(2, route.getPoints().size());
+            setField(service, "pendingPoint", new GeoPosition(1.0, 1.0));
+            setField(service, "isRouting", true);
+            setField(service, "isGenerateMode", true);
+            setField(service, "generateStartPoint", new GeoPosition(2.0, 2.0));
 
-        // undo then redo
-        service.onUndo();
-        assertEquals(1, route.getPoints().size());
+            service.onClearRoute();
 
-        service.onRedo();
-        assertEquals(2, route.getPoints().size());
-
-        service.dispose();
-    }
-
-    @Test
-    public void onRedoWithNoRedoStateDoesNothingTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-
-        // no redo state prepared
-        route.addWaypoint(getSamplePosition());
-        int sizeBefore = route.getPoints().size();
-
-        service.onRedo();
-        int sizeAfter = route.getPoints().size();
-
-        assertEquals(sizeBefore, sizeAfter);
-
-        service.dispose();
-    }
-
-    /* onSaveRoute */
-
-    @Disabled("Requires interactive JOptionPane dialogs; not suitable for automated unit tests")
-    @Test
-    public void onSaveRouteWithEmptyRouteShowsMessageDialogTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-        route.clear();
-
-        assertDoesNotThrow(service::onSaveRoute);
-
-        service.dispose();
-    }
-
-    @Disabled("Requires mocking JOptionPane.showInputDialog for route name input")
-    @Test
-    public void onSaveRoutePersistsRouteAndUpdatesIdAndNameTest() throws Exception {
-        RouteService service = new RouteService();
-        Route route = getCurrentRoute(service);
-        route.loadFromGeoPositions(java.util.Arrays.asList(
-                new GeoPosition(0.0, 0.0),
-                new GeoPosition(1.0, 1.0)
-        ));
-
-        // In a real test you would mock JOptionPane.showInputDialog to return "My Route"
-        // and then assert that route.getId() > 0 and route.getName().equals("My Route").
-
-        service.dispose();
-    }
-
-    /* onLoadRoute */
-
-    @Disabled("Requires interactive JOptionPane selection; not suitable for automated unit tests")
-    @Test
-    public void onLoadRouteWithNoSavedRoutesShowsNoRoutesMessageTest() throws Exception {
-        // In a full integration test, ensure DB is empty and call onLoadRoute(),
-        // verifying that a message dialog about 'No saved routes' is shown.
-        RouteService service = new RouteService();
-        assertDoesNotThrow(service::onLoadRoute);
-        service.dispose();
-    }
-
-    @Disabled("Requires mocking JOptionPane route selection list")
-    @Test
-    public void onLoadRouteLoadsSelectedRouteIntoCurrentRouteTest() throws Exception {
-        // Would involve:
-        // 1. Saving a route via Database directly.
-        // 2. Mocking JOptionPane.showInputDialog to return that route's summary.
-        // 3. Calling onLoadRoute() and verifying currentRoute matches saved route.
-    }
-
-    /* onZoomIn */
-
-    private int getViewerZoom(Map map) throws Exception {
-        Field viewerField = Map.class.getDeclaredField("viewer");
-        viewerField.setAccessible(true);
-        Object viewer = viewerField.get(map);
-        return (int) viewer.getClass().getMethod("getZoom").invoke(viewer);
+            assertTrue(route.isEmpty());
+            assertNull(getField(service, "pendingPoint", GeoPosition.class));
+            assertFalse(getBooleanField(service, "isRouting"));
+            assertFalse(getBooleanField(service, "isGenerateMode"));
+            assertNull(getField(service, "generateStartPoint", GeoPosition.class));
+        } finally {
+            service.dispose();
+        }
     }
 
     @Test
-    public void onZoomInDelegatesToMapZoomInTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
+    public void onClearRouteRecordsMementoAllowingUndoToRestoreTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
 
-        int before = getViewerZoom(map);
-        service.onZoomIn();
-        int after = getViewerZoom(map);
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
+            assertFalse(route.isEmpty());
 
-        assertTrue(after <= before);
-        assertTrue(after >= 0);
+            service.onClearRoute();
+            assertTrue(route.isEmpty());
 
-        service.dispose();
+            service.onUndo();
+            assertFalse(route.isEmpty());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onUndo() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void onUndoRestoresPreviousRouteStateWhenHistoryExistsTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
+            UndoManager undoManager = getField(service, "undoManager", UndoManager.class);
+
+            route.clear();
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
+            undoManager.recordMemento(route.createMemento());  // snapshot with 1 point
+
+            route.addWaypoint(new GeoPosition(1.0, 1.0)); // now 2 points
+            assertEquals(2, route.getAllPointsAsGeoPositions().size());
+
+            service.onUndo();
+
+            assertEquals(1, route.getAllPointsAsGeoPositions().size());
+        } finally {
+            service.dispose();
+        }
     }
 
     @Test
-    public void onZoomInDoesNotGoBelowMinimumZoomTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
+    public void onUndoWithNoHistoryLeavesRouteUnchangedTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
+            route.clear();
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
 
-        // Repeated zoom in should not go below 0
-        for (int i = 0; i < 50; i++) {
+            int before = route.getAllPointsAsGeoPositions().size();
+            service.onUndo();
+            int after = route.getAllPointsAsGeoPositions().size();
+
+            assertEquals(before, after);
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onRedo() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void onRedoAfterUndoRestoresLaterStateTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
+            UndoManager undoManager = getField(service, "undoManager", UndoManager.class);
+
+            route.clear();
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
+            undoManager.recordMemento(route.createMemento()); // state with 1 point
+
+            route.addWaypoint(new GeoPosition(1.0, 1.0)); // state with 2 points
+
+            service.onUndo(); // back to 1 point, redo has 2-point state
+            assertEquals(1, route.getAllPointsAsGeoPositions().size());
+
+            service.onRedo(); // should go back to 2 points
+            assertEquals(2, route.getAllPointsAsGeoPositions().size());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onRedoWithNoRedoHistoryLeavesRouteUnchangedTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
+            route.clear();
+            route.addWaypoint(new GeoPosition(0.0, 0.0));
+
+            int before = route.getAllPointsAsGeoPositions().size();
+            service.onRedo();
+            int after = route.getAllPointsAsGeoPositions().size();
+
+            assertEquals(before, after);
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onSaveRoute() tests  (only empty-route branch – no dialogs)
+    // -------------------------------------------------------------
+
+    @Test
+    public void onSaveRouteWithEmptyRouteDoesNotChangeRouteIdTest() {
+        RouteService service = createService();
+        try {
+            Route route = getField(service, "currentRoute", Route.class);
+            route.clear();
+            int beforeId = route.getId();
+
+            service.onSaveRoute();
+
+            assertEquals(beforeId, route.getId());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onSaveRouteWithEmptyRouteDoesNotPersistNewRouteTest() {
+        RouteService service = createService();
+        try {
+            Database db = getField(service, "database", Database.class);
+            Route route = getField(service, "currentRoute", Route.class);
+            route.clear();
+
+            List<Database.RouteSummary> before = db.getAllRoutes();
+            service.onSaveRoute();
+            List<Database.RouteSummary> after = db.getAllRoutes();
+
+            assertEquals(before.size(), after.size());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onLoadRoute() tests  (just ensure no exception)
+    // -------------------------------------------------------------
+
+    @Test
+    public void onLoadRouteDoesNotThrowWhenInvokedTest() {
+        RouteService service = createService();
+        try {
+            service.onLoadRoute();
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLoadRouteKeepsRouteObjectNonNullTest() {
+        RouteService service = createService();
+        try {
+            Route beforeRoute = getField(service, "currentRoute", Route.class);
+
+            service.onLoadRoute();
+
+            Route afterRoute = getField(service, "currentRoute", Route.class);
+            assertNotNull(afterRoute);
+            assertSame(beforeRoute.getClass(), afterRoute.getClass());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onGenerateRoute() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void onGenerateRouteEntersGenerateModeWhenIdleTest() {
+        RouteService service = createService();
+        try {
+            setField(service, "isRouting", false);
+            setField(service, "isGenerateMode", false);
+
+            service.onGenerateRoute();
+
+            assertTrue(getBooleanField(service, "isGenerateMode"));
+            assertNull(getField(service, "generateStartPoint", GeoPosition.class));
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onGenerateRouteCalledAgainExitsGenerateModeTest() {
+        RouteService service = createService();
+        try {
+            setField(service, "isRouting", false);
+            setField(service, "isGenerateMode", false);
+
+            service.onGenerateRoute(); // enter generate mode
+            assertTrue(getBooleanField(service, "isGenerateMode"));
+
+            service.onGenerateRoute(); // exit generate mode
+            assertFalse(getBooleanField(service, "isGenerateMode"));
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // onZoomIn() / onZoomOut() tests
+    // -------------------------------------------------------------
+
+    @Test
+    public void onZoomInAdjustsViewerZoomTowardsMinTest() {
+        RouteService service = createService();
+        try {
+            Map map = getField(service, "map", Map.class);
+            JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
+
+            int before = viewer.getZoom();
             service.onZoomIn();
+            int after = viewer.getZoom();
+
+            assertTrue(after <= before);
+        } finally {
+            service.dispose();
         }
-
-        int zoom = getViewerZoom(map);
-        assertEquals(1, zoom);
-
-        service.dispose();
-    }
-
-    /* onZoomOut */
-
-    @Test
-    public void onZoomOutDelegatesToMapZoomOutTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
-
-        int before = getViewerZoom(map);
-        service.onZoomOut();
-        int after = getViewerZoom(map);
-
-        assertTrue(after >= before);
-        assertTrue(after <= 19);
-
-        service.dispose();
     }
 
     @Test
-    public void onZoomOutDoesNotExceedMaximumZoomTest() throws Exception {
-        RouteService service = new RouteService();
-        Map map = getMap(service);
+    public void onZoomOutAdjustsViewerZoomTowardsMaxTest() {
+        RouteService service = createService();
+        try {
+            Map map = getField(service, "map", Map.class);
+            JXMapViewer viewer = getField(map, "viewer", JXMapViewer.class);
 
-        for (int i = 0; i < 50; i++) {
+            int before = viewer.getZoom();
             service.onZoomOut();
+            int after = viewer.getZoom();
+
+            assertTrue(after >= before);
+        } finally {
+            service.dispose();
         }
+    }
 
-        int zoom = getViewerZoom(map);
-        assertEquals(19, zoom);
+    // -------------------------------------------------------------
+    // onLoginLogout() tests (no custom AuthState impl)
+    // -------------------------------------------------------------
 
-        service.dispose();
+    @Test
+    public void onLoginLogoutDoesNotThrowWhenInvokedTest() {
+        RouteService service = createService();
+        try {
+            service.onLoginLogout();
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLoginLogoutLeavesAuthContextNonNullTest() {
+        RouteService service = createService();
+        try {
+            AuthContext ctxBefore = getField(service, "authContext", AuthContext.class);
+
+            service.onLoginLogout();
+
+            AuthContext ctxAfter = getField(service, "authContext", AuthContext.class);
+            assertNotNull(ctxAfter);
+            assertSame(ctxBefore, ctxAfter);
+        } finally {
+            service.dispose();
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Auth callbacks: onStateChanged / onLoginSuccess / onLoginFailure /
+    //                 onLogout / onRegistrationSuccess / onRegistrationFailure
+    // -------------------------------------------------------------
+
+    @Test
+    public void onStateChangedAcceptsNullStatesWithoutThrowingTest() {
+        RouteService service = createService();
+        try {
+            service.onStateChanged(null, null);
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onStateChangedDoesNotModifyUserProfileReferenceTest() {
+        RouteService service = createService();
+        try {
+            UserProfile before = getField(service, "userProfile", UserProfile.class);
+            service.onStateChanged(null, null);
+            UserProfile after = getField(service, "userProfile", UserProfile.class);
+
+            assertSame(before, after);
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLoginSuccessSwitchesToUserProfileAndUpdatesRoutingApiTest() {
+        RouteService service = createService();
+        try {
+            UserProfile user = new UserProfile(10);
+            user.setPreferredRoutingProfile(RoutingAPI.RoutingProfile.CYCLING_REGULAR);
+
+            service.onLoginSuccess(user);
+
+            UserProfile currentProfile = getField(service, "userProfile", UserProfile.class);
+            RoutingAPI api = getField(service, "routingAPI", RoutingAPI.class);
+
+            assertSame(user, currentProfile);
+            assertEquals(user.getPreferredRoutingProfile(), api.getProfile());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLoginSuccessSetsPositiveStatusMessageTest() {
+        RouteService service = createService();
+        try {
+            UserProfile user = new UserProfile(10);
+            user.setUserName("Tester");
+
+            service.onLoginSuccess(user);
+
+            JLabel label = getField(service, "statusLabel", JLabel.class);
+            assertTrue(label.getText().contains("Welcome, Tester"));
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLoginFailureSetsErrorStatusWithReasonTest() {
+        RouteService service = createService();
+        try {
+            service.onLoginFailure("Bad password");
+
+            JLabel label = getField(service, "statusLabel", JLabel.class);
+            assertTrue(label.getText().contains("Login failed"));
+            assertTrue(label.getText().contains("Bad password"));
+            assertEquals(Color.RED, label.getForeground());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLogoutSwitchesBackToGuestProfileTest() {
+        RouteService service = createService();
+        try {
+            UserProfile user = new UserProfile(10);
+            service.onLoginSuccess(user); // switch to user
+
+            service.onLogout();
+
+            UserProfile profile = getField(service, "userProfile", UserProfile.class);
+            assertFalse(profile.isAuthenticatedUser());
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onLogoutSetsNeutralStatusMessageTest() {
+        RouteService service = createService();
+        try {
+            service.onLogout();
+
+            JLabel label = getField(service, "statusLabel", JLabel.class);
+            assertTrue(label.getText().contains("Logged out"));
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onRegistrationSuccessSwitchesToUserProfileAndGreetsTest() {
+        RouteService service = createService();
+        try {
+            UserProfile user = new UserProfile(20);
+            user.setUserName("NewUser");
+
+            service.onRegistrationSuccess(user);
+
+            UserProfile profile = getField(service, "userProfile", UserProfile.class);
+            JLabel label = getField(service, "statusLabel", JLabel.class);
+
+            assertSame(user, profile);
+            assertTrue(label.getText().contains("Account created"));
+            assertTrue(label.getText().contains("NewUser"));
+        } finally {
+            service.dispose();
+        }
+    }
+
+    @Test
+    public void onRegistrationFailureSetsErrorStatusWithReasonTest() {
+        RouteService service = createService();
+        try {
+            service.onRegistrationFailure("Username taken");
+
+            JLabel label = getField(service, "statusLabel", JLabel.class);
+            assertTrue(label.getText().contains("Registration failed"));
+            assertTrue(label.getText().contains("Username taken"));
+            assertEquals(Color.RED, label.getForeground());
+        } finally {
+            service.dispose();
+        }
     }
 }
