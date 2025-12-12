@@ -16,15 +16,13 @@ import java.util.regex.Pattern;
 /**
  * Routing API that provides road snapping and round-trip route generation functionality.
  *
- * Uses OpenRouteService API (requires API key from https://openrouteservice.org/)
- * Free tier: 2000 requests/day
+ * OpenRouteService API
  */
 public class RoutingAPI {
 
     private static final String ORS_BASE_URL = "https://api.openrouteservice.org";
-    private String apiKey;
+    private final String apiKey;
 
-    // Routing profile options
     public enum RoutingProfile {
         DRIVING_CAR("driving-car"),
         FOOT_WALKING("foot-walking"),
@@ -53,72 +51,39 @@ public class RoutingAPI {
         return currentProfile;
     }
 
-    /**
-     * Generate a round-trip route starting from a given point with approximately the specified distance.
-     * Returns a RouteResult with elevation data.
-     *
-     * @param startPoint The starting (and ending) point for the round trip
-     * @param distanceKm The desired total distance of the round trip in kilometers
-     * @return RouteResult containing the route and elevation data, or null if generation fails
-     */
-    public RouteResult generateRoundTripWithElevation(GeoPosition startPoint, double distanceKm) {
-        return generateRoundTripWithElevation(startPoint, distanceKm, 5, null);
+
+    public RouteResult generateRoundTripWithAPI(GeoPosition startPoint, double distanceKm) {
+        return generateRoundTripWithAPI(startPoint, distanceKm, 5, null);
     }
 
-    /**
-     * Generate a round-trip route with more control over the shape.
-     * Returns a RouteResult with elevation data.
-     *
-     * @param startPoint The starting (and ending) point for the round trip
-     * @param distanceKm The desired total distance of the round trip in kilometers
-     * @param points Number of points to use for generating the route (more points = more circular)
-     * @param seed Optional seed for randomization of route direction (can be null)
-     * @return RouteResult containing the route and elevation data, or null if generation fails
-     */
-    public RouteResult generateRoundTripWithElevation(GeoPosition startPoint, double distanceKm, int points, Integer seed) {
+
+    public RouteResult generateRoundTripWithAPI(GeoPosition startPoint, double distanceKm, int points, Integer seed) {
         if (!hasApiKey() || startPoint == null || distanceKm <= 0) {
             return null;
         }
 
-        // Convert km to meters for the API
-        int distanceMeters = (int) (distanceKm * 1000);
+        int distanceMeters = convertKMtoMeters(distanceKm);
 
-        // Ensure points is at least 3 for a meaningful round trip
-        points = Math.max(3, points);
+        points = makeSureAtLeast3Points(points);
 
         // Try with foot-walking first (most likely to succeed for running routes)
-        RouteResult result = tryRoundTripWithProfileAndElevation(startPoint, distanceMeters, points, seed, RoutingProfile.FOOT_WALKING);
+        RouteResult result = generateRoundTripWithProfileAndElevation(startPoint, distanceMeters, points, seed, RoutingProfile.FOOT_WALKING);
 
         // If foot-walking fails, try cycling as fallback
         if (result == null) {
             System.out.println("Foot-walking round trip failed, trying cycling...");
-            result = tryRoundTripWithProfileAndElevation(startPoint, distanceMeters, points, seed, RoutingProfile.CYCLING_REGULAR);
+            result = generateRoundTripWithProfileAndElevation(startPoint, distanceMeters, points, seed, RoutingProfile.CYCLING_REGULAR);
         }
 
         return result;
     }
 
-    /**
-     * Try to generate a round trip using a specific profile, with elevation data
-     */
-    private RouteResult tryRoundTripWithProfileAndElevation(GeoPosition startPoint, int distanceMeters,
-                                                            int points, Integer seed, RoutingProfile profile) {
+
+    private RouteResult generateRoundTripWithProfileAndElevation(GeoPosition startPoint, int distanceMeters,
+                                                                 int points, Integer seed, RoutingProfile profile) {
         try {
-            // Build JSON request body for round trip with elevation
-            StringBuilder jsonBody = new StringBuilder();
-            jsonBody.append("{\"coordinates\":[[");
-            jsonBody.append(startPoint.getLongitude()).append(",").append(startPoint.getLatitude());
-            jsonBody.append("]],");
-            jsonBody.append("\"elevation\":true,");  // Request elevation data
-            jsonBody.append("\"options\":{\"round_trip\":{");
-            jsonBody.append("\"length\":").append(distanceMeters).append(",");
-            jsonBody.append("\"points\":").append(points);
-            if (seed != null) {
-                jsonBody.append(",\"seed\":").append(seed);
-            }
-            jsonBody.append("}},");
-            jsonBody.append("\"format\":\"geojson\"");
-            jsonBody.append("}");
+
+            StringBuilder jsonBody = buildJsonRequestForRoundTrip(startPoint, distanceMeters, points, seed);
 
             System.out.println("Round trip request with profile " + profile.getValue() + ": " + jsonBody.toString());
 
@@ -131,11 +96,7 @@ public class RoutingAPI {
             System.out.println("Response preview: " + response.substring(0, Math.min(500, response.length())));
 
             // Check for error in response
-            if (response.contains("\"error\"")) {
-                System.err.println("API returned error response for round trip");
-                System.err.println("Error response: " + response.substring(0, Math.min(1000, response.length())));
-                return null;
-            }
+            checkIfResponseHasError(response);
 
             // Parse GeoJSON response with elevation
             RouteResult result = parseGeoJsonResponseWithElevation(response);
@@ -159,84 +120,34 @@ public class RoutingAPI {
         }
     }
 
-    /**
-     * Find a route between waypoints that follows actual roads/paths.
-     * Returns a RouteResult with elevation data.
-     *
-     * @param waypoints List of waypoints to route between
-     * @return RouteResult containing the route and elevation data, or null if routing fails
-     */
-    public RouteResult snapToRoadsWithElevation(List<GeoPosition> waypoints) {
+
+    public RouteResult snapToRoadsWithTwoPoints(List<GeoPosition> waypoints) {
         if (!hasApiKey() || waypoints == null || waypoints.size() < 2) {
             return null;
         }
 
         // Try with the current profile first
-        RouteResult result = tryRouteWithProfileAndElevation(waypoints, currentProfile);
+        RouteResult result = tryRouteWithProfile(waypoints, currentProfile);
 
         // If current profile fails and it's not foot-walking, try foot-walking as fallback
         if (result == null && currentProfile != RoutingProfile.FOOT_WALKING) {
             System.out.println("Primary profile failed, trying foot-walking as fallback...");
-            result = tryRouteWithProfileAndElevation(waypoints, RoutingProfile.FOOT_WALKING);
+            result = tryRouteWithProfile(waypoints, RoutingProfile.FOOT_WALKING);
         }
 
         // If still null and not driving, try driving as last resort
         if (result == null && currentProfile != RoutingProfile.DRIVING_CAR) {
             System.out.println("Foot-walking failed, trying driving-car as last resort...");
-            result = tryRouteWithProfileAndElevation(waypoints, RoutingProfile.DRIVING_CAR);
+            result = tryRouteWithProfile(waypoints, RoutingProfile.DRIVING_CAR);
         }
 
         return result;
     }
 
-    /**
-     * Legacy method - Find a route between waypoints (without elevation data)
-     * @deprecated Use snapToRoadsWithElevation instead
-     */
-    public List<GeoPosition> snapToRoads(List<GeoPosition> waypoints) {
-        RouteResult result = snapToRoadsWithElevation(waypoints);
-        return result != null ? result.getPoints() : null;
-    }
 
-    /**
-     * Legacy method - Generate a round-trip route (without elevation data)
-     * @deprecated Use generateRoundTripWithElevation instead
-     */
-    public List<GeoPosition> generateRoundTrip(GeoPosition startPoint, double distanceKm) {
-        RouteResult result = generateRoundTripWithElevation(startPoint, distanceKm);
-        return result != null ? result.getPoints() : null;
-    }
-
-    /**
-     * Legacy method - Generate a round-trip route (without elevation data)
-     * @deprecated Use generateRoundTripWithElevation instead
-     */
-    public List<GeoPosition> generateRoundTrip(GeoPosition startPoint, double distanceKm, int points, Integer seed) {
-        RouteResult result = generateRoundTripWithElevation(startPoint, distanceKm, points, seed);
-        return result != null ? result.getPoints() : null;
-    }
-
-    /**
-     * Try to get a route using a specific profile, with elevation data
-     */
-    private RouteResult tryRouteWithProfileAndElevation(List<GeoPosition> waypoints, RoutingProfile profile) {
+    private RouteResult tryRouteWithProfile(List<GeoPosition> waypoints, RoutingProfile profile) {
         try {
-            // Build JSON request body with elevation
-            StringBuilder jsonBody = new StringBuilder();
-            jsonBody.append("{\"coordinates\":[");
-
-            for (int i = 0; i < waypoints.size(); i++) {
-                GeoPosition gp = waypoints.get(i);
-                jsonBody.append("[").append(gp.getLongitude()).append(",").append(gp.getLatitude()).append("]");
-                if (i < waypoints.size() - 1) {
-                    jsonBody.append(",");
-                }
-            }
-
-            jsonBody.append("],");
-            jsonBody.append("\"elevation\":true,");  // Request elevation data
-            jsonBody.append("\"format\":\"geojson\"");
-            jsonBody.append("}");
+            StringBuilder jsonBody = buildJasonRequestForRouteWithProfile(waypoints);
 
             System.out.println("Routing request with profile " + profile.getValue() + ": " + jsonBody.toString());
 
@@ -248,14 +159,9 @@ public class RoutingAPI {
             System.out.println("Response length: " + response.length());
             System.out.println("Response preview: " + response.substring(0, Math.min(500, response.length())));
 
-            // Check for error in response
-            if (response.contains("\"error\"")) {
-                System.err.println("API returned error response");
-                System.err.println("Error response: " + response.substring(0, Math.min(1000, response.length())));
-                return null;
-            }
 
-            // Parse GeoJSON response with elevation
+            checkIfResponseHasError(response);
+
             RouteResult result = parseGeoJsonResponseWithElevation(response);
 
             // Validate result
@@ -277,10 +183,7 @@ public class RoutingAPI {
         }
     }
 
-    /**
-     * Parse GeoJSON response from OpenRouteService including elevation data.
-     * Returns coordinates and ascent/descent values.
-     */
+
     private RouteResult parseGeoJsonResponseWithElevation(String response) {
         List<GeoPosition> points = new ArrayList<>();
         double ascent = 0;
@@ -290,7 +193,7 @@ public class RoutingAPI {
         try {
             System.out.println("Parsing GeoJSON response with elevation...");
 
-            // Debug: print a larger portion of the response to see the structure
+
             System.out.println("Full response (first 2000 chars): " +
                     response.substring(0, Math.min(2000, response.length())));
 
@@ -406,18 +309,7 @@ public class RoutingAPI {
         return new RouteResult(points, ascent, descent, distance);
     }
 
-    /**
-     * Legacy parser - Parse GeoJSON response without elevation data
-     * @deprecated Use parseGeoJsonResponseWithElevation instead
-     */
-    private List<GeoPosition> parseGeoJsonResponse(String response) {
-        RouteResult result = parseGeoJsonResponseWithElevation(response);
-        return result.getPoints();
-    }
 
-    /**
-     * Make a POST request to ORS API
-     */
     private String makePostRequest(String urlString, String jsonBody) throws Exception {
         System.out.println("Making POST request to: " + urlString);
         System.out.println("Request body: " + jsonBody);
@@ -468,6 +360,61 @@ public class RoutingAPI {
         }
 
         return response.toString();
+    }
+
+    StringBuilder buildJsonRequestForRoundTrip(GeoPosition startPoint, int distanceMeters, int points, Integer seed) {
+        StringBuilder jsonBody = new StringBuilder();
+        jsonBody.append("{\"coordinates\":[[");
+        jsonBody.append(startPoint.getLongitude()).append(",").append(startPoint.getLatitude());
+        jsonBody.append("]],");
+        jsonBody.append("\"elevation\":true,");
+        jsonBody.append("\"options\":{\"round_trip\":{");
+        jsonBody.append("\"length\":").append(distanceMeters).append(",");
+        jsonBody.append("\"points\":").append(points);
+        if (seed != null) {
+            jsonBody.append(",\"seed\":").append(seed);
+        }
+        jsonBody.append("}},");
+        jsonBody.append("\"format\":\"geojson\"");
+        jsonBody.append("}");
+
+        return jsonBody;
+    }
+
+    StringBuilder buildJasonRequestForRouteWithProfile(List<GeoPosition> waypoints){
+        StringBuilder jsonBody = new StringBuilder();
+
+        jsonBody.append("{\"coordinates\":[");
+
+        for (int i = 0; i < waypoints.size(); i++) {
+            GeoPosition gp = waypoints.get(i);
+            jsonBody.append("[").append(gp.getLongitude()).append(",").append(gp.getLatitude()).append("]");
+            if (i < waypoints.size() - 1) {
+                jsonBody.append(",");
+            }
+        }
+
+        jsonBody.append("],");
+        jsonBody.append("\"elevation\":true,");  // Request elevation data
+        jsonBody.append("\"format\":\"geojson\"");
+        jsonBody.append("}");
+
+        return jsonBody;
+    }
+
+    void checkIfResponseHasError(String response) {
+        if (response.contains("\"error\"")) {
+            System.err.println("API returned error response");
+            System.err.println("Error response: " + response.substring(0, Math.min(1000, response.length())));
+        }
+    }
+
+    int convertKMtoMeters(double km) {
+        return (int)(km * 1000);
+    }
+
+    int makeSureAtLeast3Points(int points) {
+        return Math.max(points, 3);
     }
 
 }

@@ -7,16 +7,17 @@ package org.example;
  * Valid actions: logout
  * Invalid actions: login, register (already have an account)
  */
+
 public class LoggedInState implements AuthState {
 
     @Override
     public void login(AuthContext context, String username, String password) {
-        // Already logged in
+
         UserProfile currentUser = context.getCurrentUser();
         if (currentUser != null && currentUser.getUserName().equals(username)) {
             System.out.println("Already logged in as " + username);
         } else {
-            // Different user trying to log in - must log out first
+
             System.out.println("Please log out first before logging in as a different user");
             context.notifyLoginFailure("Please log out first");
         }
@@ -27,12 +28,10 @@ public class LoggedInState implements AuthState {
         UserProfile user = context.getCurrentUser();
         String username = user != null ? user.getUserName() : "Unknown";
 
-        // Save user data before logging out
         if (user != null) {
-            context.getDatabase().saveUser(user);
+            context.getDatabase().saveUserToDatabase(user);
         }
 
-        // Clear current user and transition to logged out
         context.setCurrentUser(null);
         context.setState(new LoggedOutState());
         context.notifyLogout();
@@ -42,7 +41,7 @@ public class LoggedInState implements AuthState {
 
     @Override
     public void register(AuthContext context, String username, String password, String confirmPassword) {
-        // Can't register when already logged in
+
         System.out.println("Already logged in. Please log out to create a new account.");
         context.notifyRegistrationFailure("Already logged in");
     }

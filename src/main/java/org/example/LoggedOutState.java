@@ -7,24 +7,25 @@ package org.example;
  * Valid actions: login, register
  * Invalid actions: logout
  */
+
 public class LoggedOutState implements AuthState {
 
     @Override
     public void login(AuthContext context, String username, String password) {
-        // Transition to logging in state
+
         context.setState(new LoggingInState(username, password));
     }
 
     @Override
     public void logout(AuthContext context) {
-        // Already logged out - no action needed
+
         System.out.println("Already logged out.");
         context.notifyLoginFailure("Already logged out");
     }
 
     @Override
     public void register(AuthContext context, String username, String password, String confirmPassword) {
-        // Transition to registering state
+
         context.setState(new RegisteringState(username, password, confirmPassword));
     }
 

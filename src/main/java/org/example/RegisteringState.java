@@ -13,7 +13,6 @@ public class RegisteringState implements AuthState {
     private final String password;
     private final String confirmPassword;
 
-    // Password requirements
     private static final int MIN_PASSWORD_LENGTH = 4;
     private static final int MIN_USERNAME_LENGTH = 3;
 
@@ -23,44 +22,32 @@ public class RegisteringState implements AuthState {
         this.confirmPassword = confirmPassword;
     }
 
-    /**
-     * Process the registration attempt
-     * Called by AuthContext after state transition
-     */
     public void processRegistration(AuthContext context) {
         System.out.println("Processing registration for user: " + username);
 
-        // Validate username
-        if (username == null || username.trim().length() < MIN_USERNAME_LENGTH) {
-            registrationFailed(context,
-                    "Username must be at least " + MIN_USERNAME_LENGTH + " characters");
+        if (!isUsernameValid()) {
+            registrationFailed(context, "Username must be at least " + MIN_USERNAME_LENGTH + " characters");
             return;
         }
 
         String trimmedUsername = username.trim();
 
-        // Check if username already exists
-        Database db = context.getDatabase();
-        if (db.userExists(trimmedUsername)) {
+        if (isUsernameTaken(context, trimmedUsername)) {
             registrationFailed(context, "Username already taken");
             return;
         }
 
-        // Validate password
-        if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
-            registrationFailed(context,
-                    "Password must be at least " + MIN_PASSWORD_LENGTH + " characters");
+        if (!isPasswordValid()) {
+            registrationFailed(context, "Password must be at least " + MIN_PASSWORD_LENGTH + " characters");
             return;
         }
 
-        // Check password confirmation
-        if (!password.equals(confirmPassword)) {
+        if (!doPasswordsMatch()) {
             registrationFailed(context, "Passwords do not match");
             return;
         }
 
-        // Create new user
-        UserProfile newUser = db.createUser(trimmedUsername, password);
+        UserProfile newUser = createUserInDatabase(context, trimmedUsername);
 
         if (newUser != null) {
             registrationSucceeded(context, newUser);
@@ -69,8 +56,31 @@ public class RegisteringState implements AuthState {
         }
     }
 
+
+    private boolean isUsernameValid() {
+        return username != null && username.trim().length() >= MIN_USERNAME_LENGTH;
+    }
+
+    private boolean isUsernameTaken(AuthContext context, String trimmedUsername) {
+        Database db = context.getDatabase();
+        return db.userExists(trimmedUsername);
+    }
+
+    private boolean isPasswordValid() {
+        return password != null && password.length() >= MIN_PASSWORD_LENGTH;
+    }
+
+    private boolean doPasswordsMatch() {
+        return password.equals(confirmPassword);
+    }
+
+    private UserProfile createUserInDatabase(AuthContext context, String trimmedUsername) {
+        Database db = context.getDatabase();
+        return db.createNewUser(trimmedUsername, password);
+    }
+
+
     private void registrationSucceeded(AuthContext context, UserProfile user) {
-        // Auto-login after successful registration
         context.setCurrentUser(user);
         context.setState(new LoggedInState());
         context.notifyRegistrationSuccess(user);
@@ -83,21 +93,19 @@ public class RegisteringState implements AuthState {
         System.out.println("Registration failed: " + reason);
     }
 
+
     @Override
     public void login(AuthContext context, String username, String password) {
-        // Can't login while registering
         System.out.println("Cannot login while registration is in progress");
     }
 
     @Override
     public void logout(AuthContext context) {
-        // Cancel registration and return to logged out
         context.setState(new LoggedOutState());
     }
 
     @Override
     public void register(AuthContext context, String username, String password, String confirmPassword) {
-        // Already registering - ignore
         System.out.println("Registration already in progress...");
     }
 

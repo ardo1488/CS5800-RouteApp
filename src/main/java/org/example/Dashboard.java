@@ -91,14 +91,12 @@ public class Dashboard extends JPanel {
      * @param ascentMeters Total elevation gain in meters
      * @param descentMeters Total elevation loss in meters
      */
-    public void updateRouteStats(double distanceKm, double ascentMeters, double descentMeters) {
+    public void updateRouteStatsDisplay(double distanceKm, double ascentMeters, double descentMeters) {
         distanceLabel.setText(String.format("Distance: %.2f km", distanceKm));
 
-        // Display total elevation gain (ascent)
-        // For running routes, the total climb is more relevant than net elevation
         elevationLabel.setText(String.format("Elevation: %.0f m", ascentMeters));
 
-        // Color based on amount of climbing
+
         if (ascentMeters > 100) {
             elevationLabel.setForeground(new Color(178, 34, 34));  // Dark red for hilly
         } else if (ascentMeters > 50) {
@@ -111,27 +109,16 @@ public class Dashboard extends JPanel {
         repaint();
     }
 
-    /**
-     * @deprecated Use updateRouteStats(double, double, double) instead
-     */
-    public void updateRouteStats(double distanceKm, int elevationMeters) {
-        updateRouteStats(distanceKm, elevationMeters, 0);
-    }
-
     public void setMapReady() { setMapReady(true); }
     public void setMapReady(boolean ready) { this.mapReady = ready; }
     public boolean isMapReady() { return mapReady; }
 
-    /**
-     * Set the draw button state programmatically (used when entering/exiting generate mode)
-     */
+
     public void setDrawButtonSelected(boolean selected) {
         drawBtn.setSelected(selected);
     }
 
-    /**
-     * Enable or disable the generate button
-     */
+
     public void setGenerateButtonEnabled(boolean enabled) {
         generateBtn.setEnabled(enabled);
     }
@@ -147,18 +134,17 @@ public class Dashboard extends JPanel {
         loadBtn = new JButton("Load");
         zoomInBtn = new JButton("+");
         zoomOutBtn = new JButton("-");
-        generateBtn = new JButton("🏃 Generate Run");
+        generateBtn = new JButton("Generate Run");
         loginBtn = new JButton("Login");
 
-        // Style the generate button to stand out (cross-platform compatible)
-        generateBtn.setForeground(new Color(46, 139, 87)); // Sea green text
+
+        generateBtn.setForeground(new Color(46, 139, 87));
         generateBtn.setFont(generateBtn.getFont().deriveFont(Font.BOLD));
         generateBtn.setBorder(new RoundedBorder(new Color(46, 139, 87), 2, 10));
         generateBtn.setFocusPainted(false);
-        generateBtn.setContentAreaFilled(false); // Remove default background to show border cleanly
+        generateBtn.setContentAreaFilled(false);
 
-        // Style the login button
-        loginBtn.setForeground(new Color(70, 130, 180)); // Steel blue text
+        loginBtn.setForeground(new Color(70, 130, 180));
         loginBtn.setBorder(new RoundedBorder(new Color(70, 130, 180), 2, 10));
         loginBtn.setFocusPainted(false);
         loginBtn.setContentAreaFilled(false);
@@ -193,12 +179,8 @@ public class Dashboard extends JPanel {
         loginBtn.addActionListener(e -> { if (listener != null) listener.onLoginLogout(); });
     }
 
-    /**
-     * Update the user display based on authentication state
-     * @param username The username to display (or null for guest)
-     * @param isLoggedIn Whether the user is logged in
-     */
-    public void updateUserDisplay(String username, boolean isLoggedIn) {
+
+    public void updateUserDisplayBasedOnAuthenticationState(String username, boolean isLoggedIn) {
         if (isLoggedIn && username != null) {
             userLabel.setText(username);
             userLabel.setForeground(new Color(0, 100, 0)); // Dark green for logged in

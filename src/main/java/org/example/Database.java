@@ -13,18 +13,8 @@ import java.util.Locale;
 
 /**
  * Singleton Database class handling both route storage and user authentication.
- *
- * Route API:
- * - saveRoute(name, distance, elevation, List<GeoPosition>)
- * - loadRoutePoints(routeId) -> List<GeoPosition>
- * - getAllRoutes() -> List<RouteSummary>
- *
- * User API:
- * - userExists(username) -> boolean
- * - createUser(username, password) -> UserProfile
- * - authenticate(username, password) -> UserProfile
- * - saveUser(UserProfile)
  */
+
 public class Database {
 
     private static Database instance;
@@ -92,7 +82,7 @@ public class Database {
         }
     }
 
-    // ==================== Route Methods ====================
+
 
     private static class LatLonColumns {
         final String latCol, lonCol;
@@ -189,11 +179,7 @@ public class Database {
         return list;
     }
 
-    // ==================== User Authentication Methods ====================
 
-    /**
-     * Check if a username already exists
-     */
     public boolean userExists(String username) {
         String sql = "SELECT COUNT(*) FROM users WHERE username = ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -209,17 +195,13 @@ public class Database {
         return false;
     }
 
-    /**
-     * Create a new user account
-     * @return The new UserProfile, or null if creation failed
-     */
-    public UserProfile createUser(String username, String password) {
-        try {
-            // Generate salt and hash password
-            String salt = generateSalt();
-            String passwordHash = hashPassword(password, salt);
 
-            // Insert user
+    public UserProfile createNewUser(String username, String password) {
+        try {
+            String salt = generateRandomSaltForPasswordHashing();
+            String passwordHash = hashPasswordWithSalt(password, salt);
+
+
             String insertUser = "INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)";
             int userId = -1;
 
@@ -258,11 +240,7 @@ public class Database {
         return null;
     }
 
-    /**
-     * Authenticate a user
-     * @return The UserProfile if successful, null if authentication failed
-     */
-    public UserProfile authenticate(String username, String password) {
+    public UserProfile authenticateAUser(String username, String password) {
         String sql = "SELECT id, password_hash, salt FROM users WHERE username = ?";
 
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -275,10 +253,10 @@ public class Database {
                     String salt = rs.getString("salt");
 
                     // Verify password
-                    String inputHash = hashPassword(password, salt);
+                    String inputHash = hashPasswordWithSalt(password, salt);
                     if (storedHash.equals(inputHash)) {
                         // Load and return user profile
-                        return loadUserProfile(userId, username);
+                        return loadUserProfileFromDatabase(userId, username);
                     }
                 }
             }
@@ -288,10 +266,8 @@ public class Database {
         return null;
     }
 
-    /**
-     * Load a user's profile from the database
-     */
-    private UserProfile loadUserProfile(int userId, String username) {
+
+    private UserProfile loadUserProfileFromDatabase(int userId, String username) {
         String sql = "SELECT * FROM user_profiles WHERE user_id = ?";
 
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -309,8 +285,8 @@ public class Database {
                     profile.setShowElevation(rs.getInt("show_elevation") == 1);
                     profile.setAutoFitRoute(rs.getInt("auto_fit_route") == 1);
 
-                    // Load statistics
-                    profile.loadStatistics(
+
+                    profile.loadStatisticsFromDatabase(
                             rs.getDouble("total_distance"),
                             rs.getDouble("total_elevation"),
                             rs.getInt("routes_generated"),
@@ -330,10 +306,8 @@ public class Database {
         return profile;
     }
 
-    /**
-     * Save a user's profile to the database
-     */
-    public void saveUser(UserProfile profile) {
+
+    public void saveUserToDatabase(UserProfile profile) {
         if (profile.getUserId() <= 0) {
             System.out.println("Cannot save profile: no user ID");
             return;
@@ -366,22 +340,18 @@ public class Database {
         }
     }
 
-    // ==================== Password Hashing ====================
 
-    /**
-     * Generate a random salt for password hashing
-     */
-    private String generateSalt() {
+
+
+    private String generateRandomSaltForPasswordHashing() {
         SecureRandom random = new SecureRandom();
         byte[] salt = new byte[16];
         random.nextBytes(salt);
         return Base64.getEncoder().encodeToString(salt);
     }
 
-    /**
-     * Hash a password with the given salt using SHA-256
-     */
-    private String hashPassword(String password, String salt) {
+
+    private String hashPasswordWithSalt(String password, String salt) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             md.update(salt.getBytes());
@@ -392,13 +362,10 @@ public class Database {
         }
     }
 
-    // ==================== Utility ====================
-
     public void close() {
         try { if (connection != null) connection.close(); } catch (SQLException ignored) {}
     }
 
-    // ==================== Inner Classes ====================
 
     public static class RouteSummary {
         private final int id;

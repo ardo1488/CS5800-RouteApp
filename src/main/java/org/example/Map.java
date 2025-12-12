@@ -19,153 +19,227 @@ import java.util.List;
 
 public class Map extends JPanel {
 
-    public interface MapClickListener { void onMapClick(GeoPosition position); }
+    public interface MapClickListener {
+        void onMapClick(GeoPosition position);
+    }
 
     private final JXMapViewer viewer;
     private boolean drawingMode = false;
     private Route currentRoute;
     private MapClickListener clickListener;
 
+    private static final Color ROUTE_LINE_COLOR = new Color(30, 144, 255);
+    private static final Color START_MARKER_COLOR = new Color(34, 139, 34);
+    private static final Color END_MARKER_COLOR = new Color(220, 20, 60);
+    private static final float ROUTE_LINE_WIDTH = 3f;
+    private static final int MARKER_OUTER_RADIUS = 8;
+    private static final int MARKER_INNER_RADIUS = 6;
+
     public Map() {
         setLayout(new BorderLayout());
 
-        // Be polite to OSM tile servers; set a UA (replace contact with yours if shipping)
-        System.setProperty("http.agent", "RouteMapApp/1.0 (contact: you@example.com)");
+        setHttpUserAgent();
+        TileFactoryInfo tileFactoryInfo = createOpenStreetMapTileFactoryInfo();
+        DefaultTileFactory tileFactory = createTileFactory(tileFactoryInfo);
 
-        // HTTPS OSM TileFactory
-        TileFactoryInfo httpsOSM = new TileFactoryInfo(
-                0,      // min zoom (allow one extra zoom-in level)
+        viewer = new JXMapViewer();
+        configureViewer(tileFactory);
+
+        add(viewer, BorderLayout.CENTER);
+
+        setupPanningWithMouse();
+        setupZoomingWithMouseWheel();
+        setupPanningWithKeyboard();
+        setupClickListenerForWaypoints();
+        setupRouteOverlayPainter();
+    }
+
+
+    private void setHttpUserAgent() {
+        System.setProperty("http.agent", "RouteMapApp/1.0 (contact: you@example.com)");
+    }
+
+    private TileFactoryInfo createOpenStreetMapTileFactoryInfo() {
+        return new TileFactoryInfo(
+                0,      // min zoom
                 19,     // max zoom
                 19,     // total levels
                 256,    // tile size
                 true,   // x/y orientation normal
                 true,   // y origin at top
                 "https://tile.openstreetmap.org",
-                "x","y","z") {
+                "x", "y", "z") {
             @Override
             public String getTileUrl(int x, int y, int zoom) {
-                int osmZ = 19 - zoom; // convert JXMapViewer zoom to OSM zoom
+                int osmZ = 19 - zoom;
                 return String.format("%s/%d/%d/%d.png", this.baseURL, osmZ, x, y);
             }
         };
+    }
 
-        DefaultTileFactory tf = new DefaultTileFactory(httpsOSM);
+    private DefaultTileFactory createTileFactory(TileFactoryInfo info) {
+        DefaultTileFactory tf = new DefaultTileFactory(info);
         tf.setThreadPoolSize(8);
+        return tf;
+    }
 
-        viewer = new JXMapViewer();
-        viewer.setTileFactory(tf);
+    private void configureViewer(DefaultTileFactory tileFactory) {
+        viewer.setTileFactory(tileFactory);
         viewer.setBackground(Color.decode("#1e1e1e"));
         viewer.setAddressLocation(new GeoPosition(37.7749, -122.4194));
         viewer.setZoom(4);
+    }
 
-        add(viewer, BorderLayout.CENTER);
+    private void setupPanningWithMouse() {
+        MouseInputListener panListener = new PanMouseInputListener(viewer);
+        viewer.addMouseListener(panListener);
+        viewer.addMouseMotionListener(panListener);
+    }
 
-        // === Interaction ===
-        // Drag to pan
-        MouseInputListener mia = new PanMouseInputListener(viewer);
-        viewer.addMouseListener(mia);
-        viewer.addMouseMotionListener(mia);
-
-        // Wheel to zoom â€“ keep cursor position stable while zooming
+    private void setupZoomingWithMouseWheel() {
         viewer.addMouseWheelListener(new ZoomMouseWheelListenerCursor(viewer));
+    }
 
-        // Arrow keys to pan
+    private void setupPanningWithKeyboard() {
         viewer.setFocusable(true);
         viewer.addKeyListener(new PanKeyListener(viewer));
+    }
 
-        // Click callback for adding waypoints (supports both single and double clicks)
+    private void setupClickListenerForWaypoints() {
         viewer.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (clickListener == null) return;
-                // Trigger on every click (including double-clicks) for smooth route drawing
                 clickListener.onMapClick(viewer.convertPointToGeoPosition(e.getPoint()));
-            }
-        });
-
-        // Overlay painter draws current route
-        viewer.setOverlayPainter(new Painter<JXMapViewer>() {
-            @Override
-            public void paint(Graphics2D g, JXMapViewer map, int w, int h) {
-                if (currentRoute == null) return;
-                List<GeoPosition> pts = currentRoute.getAllPointsAsGeoPositions();
-                if (pts == null || pts.isEmpty()) return;
-
-                Object aa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                Stroke old = g.getStroke();
-                Color oldColor = g.getColor();
-
-                int zoom = map.getZoom();
-                Rectangle viewport = map.getViewportBounds();
-
-                // Draw the route lines in blue
-                if (pts.size() >= 2) {
-                    g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                    g.setColor(new Color(30, 144, 255)); // Dodger blue color
-
-                    for (int i = 1; i < pts.size(); i++) {
-                        Point2D p1 = map.getTileFactory().geoToPixel(pts.get(i - 1), zoom);
-                        Point2D p2 = map.getTileFactory().geoToPixel(pts.get(i), zoom);
-                        int x1 = (int) (p1.getX() - viewport.getX());
-                        int y1 = (int) (p1.getY() - viewport.getY());
-                        int x2 = (int) (p2.getX() - viewport.getX());
-                        int y2 = (int) (p2.getY() - viewport.getY());
-                        g.drawLine(x1, y1, x2, y2);
-                    }
-                }
-
-                // Draw start point marker (green circle)
-                if (pts.size() >= 1) {
-                    Point2D startPt = map.getTileFactory().geoToPixel(pts.get(0), zoom);
-                    int sx = (int) (startPt.getX() - viewport.getX());
-                    int sy = (int) (startPt.getY() - viewport.getY());
-
-                    // Draw outer circle (white border)
-                    g.setColor(Color.WHITE);
-                    g.fillOval(sx - 8, sy - 8, 16, 16);
-
-                    // Draw inner circle (green)
-                    g.setColor(new Color(34, 139, 34)); // Forest green
-                    g.fillOval(sx - 6, sy - 6, 12, 12);
-                }
-
-                // Draw end point marker (red circle) - only if route has more than 1 point
-                if (pts.size() >= 2) {
-                    Point2D endPt = map.getTileFactory().geoToPixel(pts.get(pts.size() - 1), zoom);
-                    int ex = (int) (endPt.getX() - viewport.getX());
-                    int ey = (int) (endPt.getY() - viewport.getY());
-
-                    // Draw outer circle (white border)
-                    g.setColor(Color.WHITE);
-                    g.fillOval(ex - 8, ey - 8, 16, 16);
-
-                    // Draw inner circle (red)
-                    g.setColor(new Color(220, 20, 60)); // Crimson red
-                    g.fillOval(ex - 6, ey - 6, 12, 12);
-                }
-
-                g.setStroke(old);
-                g.setColor(oldColor);
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, aa);
             }
         });
     }
 
-    /* ---------------- Public API ---------------- */
+    private void setupRouteOverlayPainter() {
+        viewer.setOverlayPainter(new Painter<JXMapViewer>() {
+            @Override
+            public void paint(Graphics2D g, JXMapViewer map, int w, int h) {
+                paintRouteOverlay(g, map);
+            }
+        });
+    }
 
-    public void setMapClickListener(MapClickListener l) { this.clickListener = l; }
-    public void setDrawingMode(boolean enable) { this.drawingMode = enable; }
-    public boolean isDrawingMode() { return drawingMode; }
+
+
+    private void paintRouteOverlay(Graphics2D g, JXMapViewer map) {
+        if (currentRoute == null) return;
+
+        List<GeoPosition> points = currentRoute.getAllPointsAsGeoPositions();
+        if (points == null || points.isEmpty()) return;
+
+        saveGraphicsState(g);
+        enableAntiAliasing(g);
+
+        int zoom = map.getZoom();
+        Rectangle viewport = map.getViewportBounds();
+
+        drawRouteLines(g, map, points, zoom, viewport);
+        drawStartMarker(g, map, points, zoom, viewport);
+        drawEndMarker(g, map, points, zoom, viewport);
+
+        restoreGraphicsState(g);
+    }
+
+    private void saveGraphicsState(Graphics2D g) {
+        g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+        g.getStroke();
+        g.getColor();
+    }
+
+    private void enableAntiAliasing(Graphics2D g) {
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+    }
+
+    private void restoreGraphicsState(Graphics2D g) {
+        // Graphics state is restored when the paint method returns
+    }
+
+    private void drawRouteLines(Graphics2D g, JXMapViewer map, List<GeoPosition> points, int zoom, Rectangle viewport) {
+        if (points.size() < 2) return;
+
+        g.setStroke(new BasicStroke(ROUTE_LINE_WIDTH, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(ROUTE_LINE_COLOR);
+
+        for (int i = 1; i < points.size(); i++) {
+            drawLineBetweenPoints(g, map, points.get(i - 1), points.get(i), zoom, viewport);
+        }
+    }
+
+    private void drawLineBetweenPoints(Graphics2D g, JXMapViewer map, GeoPosition from, GeoPosition to, int zoom, Rectangle viewport) {
+        Point2D p1 = map.getTileFactory().geoToPixel(from, zoom);
+        Point2D p2 = map.getTileFactory().geoToPixel(to, zoom);
+
+        int x1 = (int) (p1.getX() - viewport.getX());
+        int y1 = (int) (p1.getY() - viewport.getY());
+        int x2 = (int) (p2.getX() - viewport.getX());
+        int y2 = (int) (p2.getY() - viewport.getY());
+
+        g.drawLine(x1, y1, x2, y2);
+    }
+
+    private void drawStartMarker(Graphics2D g, JXMapViewer map, List<GeoPosition> points, int zoom, Rectangle viewport) {
+        if (points.isEmpty()) return;
+
+        GeoPosition startPosition = points.get(0);
+        int[] screenCoords = convertGeoPositionToScreenCoordinates(map, startPosition, zoom, viewport);
+        drawMarkerAtScreenCoordinates(g, screenCoords, START_MARKER_COLOR);
+    }
+
+    private void drawEndMarker(Graphics2D g, JXMapViewer map, List<GeoPosition> points, int zoom, Rectangle viewport) {
+        if (points.size() < 2) return;
+
+        GeoPosition endPosition = points.get(points.size() - 1);
+        int[] screenCoords = convertGeoPositionToScreenCoordinates(map, endPosition, zoom, viewport);
+        drawMarkerAtScreenCoordinates(g, screenCoords, END_MARKER_COLOR);
+    }
+
+    private int[] convertGeoPositionToScreenCoordinates(JXMapViewer map, GeoPosition position, int zoom, Rectangle viewport) {
+        Point2D pixelPoint = map.getTileFactory().geoToPixel(position, zoom);
+        int x = (int) (pixelPoint.getX() - viewport.getX());
+        int y = (int) (pixelPoint.getY() - viewport.getY());
+        return new int[]{x, y};
+    }
+
+    private void drawMarkerAtScreenCoordinates(Graphics2D g, int[] screenCoords, Color innerColor) {
+        drawOuterMarkerCircle(g, screenCoords[0], screenCoords[1]);
+        drawInnerMarkerCircle(g, screenCoords[0], screenCoords[1], innerColor);
+    }
+
+    private void drawOuterMarkerCircle(Graphics2D g, int centerX, int centerY) {
+        g.setColor(Color.WHITE);
+        g.fillOval(centerX - MARKER_OUTER_RADIUS, centerY - MARKER_OUTER_RADIUS,
+                MARKER_OUTER_RADIUS * 2, MARKER_OUTER_RADIUS * 2);
+    }
+
+    private void drawInnerMarkerCircle(Graphics2D g, int centerX, int centerY, Color color) {
+        g.setColor(color);
+        g.fillOval(centerX - MARKER_INNER_RADIUS, centerY - MARKER_INNER_RADIUS,
+                MARKER_INNER_RADIUS * 2, MARKER_INNER_RADIUS * 2);
+    }
+
+
+    public void setMapClickListener(MapClickListener l) {
+        this.clickListener = l;
+    }
+
+    public void setDrawingMode(boolean enable) {
+        this.drawingMode = enable;
+    }
+
+    public boolean isDrawingMode() {
+        return drawingMode;
+    }
 
     public void displayRoute(Route route) {
         this.currentRoute = route;
         viewer.repaint();
     }
 
-    /**
-     * Set the cursor for the map panel
-     */
     @Override
     public void setCursor(Cursor cursor) {
         super.setCursor(cursor);
@@ -178,71 +252,110 @@ public class Map extends JPanel {
         List<GeoPosition> positions = route.getAllPointsAsGeoPositions();
         if (positions.isEmpty()) return;
 
-        // Calculate bounds
-        double minLat = Double.POSITIVE_INFINITY, maxLat = Double.NEGATIVE_INFINITY;
-        double minLon = Double.POSITIVE_INFINITY, maxLon = Double.NEGATIVE_INFINITY;
+        RouteBounds bounds = calculateRouteBounds(positions);
+        GeoPosition center = calculateBoundsCenter(bounds);
+        RouteSpan span = calculateRouteSpanWithPadding(bounds);
 
-        for (GeoPosition gp : positions) {
-            minLat = Math.min(minLat, gp.getLatitude());
-            maxLat = Math.max(maxLat, gp.getLatitude());
-            minLon = Math.min(minLon, gp.getLongitude());
-            maxLon = Math.max(maxLon, gp.getLongitude());
-        }
-
-        // Calculate center
-        double centerLat = (minLat + maxLat) / 2.0;
-        double centerLon = (minLon + maxLon) / 2.0;
-
-        // Calculate the span of the route
-        double latSpan = maxLat - minLat;
-        double lonSpan = maxLon - minLon;
-
-        // Add padding factor to ensure route isn't right at the edge
-        double paddingFactor = 1.5; // 50% padding around the route
-        latSpan *= paddingFactor;
-        lonSpan *= paddingFactor;
-
-        // Get viewer dimensions
-        int viewportWidth = viewer.getWidth();
-        int viewportHeight = viewer.getHeight();
-
-        // If the viewer has no size yet, we can only center without zoom-fitting
-        if (viewportWidth <= 0 || viewportHeight <= 0) {
-            viewer.setAddressLocation(new GeoPosition(centerLat, centerLon));
-            viewer.repaint();
+        if (!isViewerSizeValid()) {
+            centerMapWithoutZoom(center);
             return;
         }
 
+        int bestZoom = calculateBestZoomLevel(span, center);
+        setMapCenterAndZoom(center, bestZoom);
+    }
+
+
+    private static class RouteBounds {
+        double minLat, maxLat, minLon, maxLon;
+
+        RouteBounds() {
+            minLat = Double.POSITIVE_INFINITY;
+            maxLat = Double.NEGATIVE_INFINITY;
+            minLon = Double.POSITIVE_INFINITY;
+            maxLon = Double.NEGATIVE_INFINITY;
+        }
+    }
+
+    private static class RouteSpan {
+        double latSpan, lonSpan;
+
+        RouteSpan(double latSpan, double lonSpan) {
+            this.latSpan = latSpan;
+            this.lonSpan = lonSpan;
+        }
+    }
+
+    private RouteBounds calculateRouteBounds(List<GeoPosition> positions) {
+        RouteBounds bounds = new RouteBounds();
+
+        for (GeoPosition gp : positions) {
+            bounds.minLat = Math.min(bounds.minLat, gp.getLatitude());
+            bounds.maxLat = Math.max(bounds.maxLat, gp.getLatitude());
+            bounds.minLon = Math.min(bounds.minLon, gp.getLongitude());
+            bounds.maxLon = Math.max(bounds.maxLon, gp.getLongitude());
+        }
+
+        return bounds;
+    }
+
+    private GeoPosition calculateBoundsCenter(RouteBounds bounds) {
+        double centerLat = (bounds.minLat + bounds.maxLat) / 2.0;
+        double centerLon = (bounds.minLon + bounds.maxLon) / 2.0;
+        return new GeoPosition(centerLat, centerLon);
+    }
+
+    private RouteSpan calculateRouteSpanWithPadding(RouteBounds bounds) {
+        double paddingFactor = 1.5;
+        double latSpan = (bounds.maxLat - bounds.minLat) * paddingFactor;
+        double lonSpan = (bounds.maxLon - bounds.minLon) * paddingFactor;
+        return new RouteSpan(latSpan, lonSpan);
+    }
+
+    private boolean isViewerSizeValid() {
+        return viewer.getWidth() > 0 && viewer.getHeight() > 0;
+    }
+
+    private void centerMapWithoutZoom(GeoPosition center) {
+        viewer.setAddressLocation(center);
+        viewer.repaint();
+    }
+
+    private int calculateBestZoomLevel(RouteSpan span, GeoPosition center) {
         TileFactoryInfo info = viewer.getTileFactory().getInfo();
         int minZoom = info.getMinimumZoomLevel();
         int maxZoom = info.getMaximumZoomLevel();
 
-        // JXMapViewer zoom levels: smaller number = more zoomed in
-        // We'll choose the most zoomed-in level where the route still fits.
-        int bestZoom = maxZoom; // default to most zoomed-out
+        int viewportWidth = viewer.getWidth();
+        int viewportHeight = viewer.getHeight();
 
         for (int zoom = minZoom; zoom <= maxZoom; zoom++) {
-            // World pixel width at this zoom (using maxZoom as top level index for our scheme)
-            int mapSize = 256 * (1 << (maxZoom - zoom));
-            double pixelsPerDegreeLat = mapSize / 180.0;
-            double pixelsPerDegreeLon = mapSize / 360.0;
-
-            // Calculate how many pixels the route would span
-            double routePixelHeight = latSpan * pixelsPerDegreeLat;
-            double routePixelWidth = lonSpan * pixelsPerDegreeLon * Math.cos(Math.toRadians(centerLat));
-
-            // Check if route fits in viewport at this zoom
-            if (routePixelWidth <= viewportWidth && routePixelHeight <= viewportHeight) {
-                bestZoom = zoom;
-                break; // this is the most zoomed-in that still fits
+            if (doesRouteSpanFitAtZoomLevel(span, center, zoom, maxZoom, viewportWidth, viewportHeight)) {
+                return zoom;
             }
         }
 
-        // Set the center and zoom
-        viewer.setAddressLocation(new GeoPosition(centerLat, centerLon));
-        viewer.setZoom(bestZoom);
+        return maxZoom;
+    }
+
+    private boolean doesRouteSpanFitAtZoomLevel(RouteSpan span, GeoPosition center, int zoom, int maxZoom,
+                                                int viewportWidth, int viewportHeight) {
+        int mapSize = 256 * (1 << (maxZoom - zoom));
+        double pixelsPerDegreeLat = mapSize / 180.0;
+        double pixelsPerDegreeLon = mapSize / 360.0;
+
+        double routePixelHeight = span.latSpan * pixelsPerDegreeLat;
+        double routePixelWidth = span.lonSpan * pixelsPerDegreeLon * Math.cos(Math.toRadians(center.getLatitude()));
+
+        return routePixelWidth <= viewportWidth && routePixelHeight <= viewportHeight;
+    }
+
+    private void setMapCenterAndZoom(GeoPosition center, int zoom) {
+        viewer.setAddressLocation(center);
+        viewer.setZoom(zoom);
         viewer.repaint();
     }
+
 
     public void zoomIn() {
         TileFactoryInfo info = viewer.getTileFactory().getInfo();

@@ -2,9 +2,7 @@ package org.example;
 
 import org.jxmapviewer.viewer.GeoPosition;
 
-/**
- * Represents a singular point on the map with geographic coordinates
- */
+
 public class Point {
     private GeoPosition geoPosition;
     private PointType type;
@@ -46,12 +44,8 @@ public class Point {
         this.type = type;
     }
 
-    /**
-     * Calculate distance to another point using Haversine formula
-     * @param other The other point
-     * @return Distance in kilometers
-     */
-    public double distanceTo(Point other) {
+
+    public double distanceBetweenPointsUsingHaversineFormula(Point other) {
         double R = 6371; // Earth's radius in km
         double lat1 = Math.toRadians(this.getLatitude());
         double lat2 = Math.toRadians(other.getLatitude());

@@ -8,22 +8,15 @@ import java.util.List;
  */
 public class RouteResult {
     private final List<GeoPosition> points;
-    private final double ascent;      // Total ascent in meters
-    private final double descent;     // Total descent in meters
-    private final double distance;    // Total distance in meters
+    private final double ascentInMeters;
+    private final double descentInMeters;
+    private final double distanceInMeters;
 
     public RouteResult(List<GeoPosition> points, double ascent, double descent, double distance) {
         this.points = points;
-        this.ascent = ascent;
-        this.descent = descent;
-        this.distance = distance;
-    }
-
-    /**
-     * Create a RouteResult with just points (no elevation data)
-     */
-    public RouteResult(List<GeoPosition> points) {
-        this(points, 0, 0, 0);
+        this.ascentInMeters = ascent;
+        this.descentInMeters = descent;
+        this.distanceInMeters = distance;
     }
 
     public List<GeoPosition> getPoints() {
@@ -31,33 +24,29 @@ public class RouteResult {
     }
 
     public double getAscent() {
-        return ascent;
+        return ascentInMeters;
     }
 
     public double getDescent() {
-        return descent;
+        return descentInMeters;
     }
 
     public double getDistance() {
-        return distance;
+        return distanceInMeters;
     }
 
-    /**
-     * Get total elevation gain (same as ascent, for clarity)
-     */
+
     public double getElevationGain() {
-        return ascent;
+        return ascentInMeters;
     }
 
-    /**
-     * Get total elevation loss (same as descent, for clarity)
-     */
+
     public double getElevationLoss() {
-        return descent;
+        return descentInMeters;
     }
 
     public boolean hasElevationData() {
-        return ascent > 0 || descent > 0;
+        return ascentInMeters > 0 || descentInMeters > 0;
     }
 
     public boolean hasPoints() {

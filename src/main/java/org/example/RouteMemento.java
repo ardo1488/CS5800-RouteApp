@@ -3,10 +3,7 @@ package org.example;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Memento class for capturing and restoring Route state.
- * Stores deep copies of Point objects plus route id/name and elevation data.
- */
+
 public class RouteMemento {
     private final List<Point> points;
     private final int id;
@@ -26,9 +23,6 @@ public class RouteMemento {
         this.descent = descent;
     }
 
-    /**
-     * @deprecated Use constructor with elevation parameters
-     */
     public RouteMemento(List<Point> points, int id, String name) {
         this(points, id, name, 0, 0);
     }
